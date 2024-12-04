@@ -7,8 +7,8 @@ from keras.models import Sequential
 from keras.layers import Dense, LSTM, Dropout
 
 # Load data
-data = pd.read_csv('stock_prices.csv')  # Replace with actual file path
-features = data[['Close', 'Volume', 'Trade_Count', 'VWAP']].values  # Replace column names as per your dataset
+data = pd.read_csv('./csv/AAPL_from_2021.csv')  # Replace with actual file path
+features = data[['close', 'volume', 'trade_count', 'vwap']].values  # Replace column names as per your dataset
 
 # Normalize data
 scaler = MinMaxScaler(feature_range=(0, 1))
@@ -60,4 +60,4 @@ plt.legend()
 plt.show()
 
 # Save the model
-model.save('stock_lstm_model_with_additional_features.h5')
+model.save('./models/AAPL_lstm_model_with_additional_features.h5')
