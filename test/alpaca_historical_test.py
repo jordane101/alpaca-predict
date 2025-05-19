@@ -5,15 +5,17 @@ import pandas as pd
 
 client = StockHistoricalDataClient("PKP6NX8RZUI9HJR5VLZ3","OHgpNCENWdYXEdD8fyBbyDW7hqXUTkDmyfhAiZ14")
 
+symbol = "NVDA"
+
 request_params = StockBarsRequest(
-    symbol_or_symbols=["AAPL"],
+    symbol_or_symbols=[symbol],
     timeframe=TimeFrame.Day,
     start="2020-01-01"
-
 )
 
 bars = client.get_stock_bars(request_params)
 
 dataframe = pd.DataFrame(bars.df)
 print(dataframe.columns)
-dataframe.to_csv("./csv/AAPL_from_2021.csv")
+dataframe.to_csv(f"./csv/{symbol}_from_2021.csv")
+
