@@ -18,6 +18,9 @@ cd "$PROJECT_DIR" || exit
 # Activate the Python virtual environment
 source "$VENV_DIR/bin/activate"
 
+# Ensure the log directory exists
+mkdir -p "$PROJECT_DIR/logs"
+
 # Run the Python script and redirect all output (stdout and stderr) to a dated log file
 python hmm_trader.py >> "$PROJECT_DIR/logs/trader_log_$(date +\%Y-\%m-\%d).log" 2>&1
 
