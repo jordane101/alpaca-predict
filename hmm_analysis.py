@@ -18,19 +18,20 @@ from alpaca.data.timeframe import TimeFrame
 from sklearn.preprocessing import QuantileTransformer
 from sklearn.model_selection import train_test_split
 
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 class AnalyzeHMM:
     load_dotenv(".env")
     KEY = os.getenv("PAPER_KEY")
     SECRET = os.getenv("PAPER_SEC")
-    def __init__(self,  ticker:str, timeframe=TimeFrame.Day, n_components=3, model_order=1, bars_data=None):
+    def __init__(self,  ticker:str, timeframe=TimeFrame.Day, n_components=3, model_order=1, bars_data=None, verbose=True):
         self.client = StockHistoricalDataClient(self.KEY,self.SECRET)
         self.timeframe = timeframe
         self.ticker = ticker
         self.n_components = n_components
         self.model_order = model_order
+        self.verbose = verbose
         self.model = None
         self.quantizer = None
         self.state_means = None
@@ -56,10 +57,13 @@ class AnalyzeHMM:
         self.train() # Train the model upon initialization
 
     def getStockByTicker(self, ticker: str):
+        # Calculate a dynamic start date (e.g., 2 years ago) to ensure we get data.
+        start_date = (datetime.now() - timedelta(days=365 * 2)).strftime('%Y-%m-%d')
         request_params = StockBarsRequest(
             symbol_or_symbols=[ticker],
             timeframe=self.timeframe,
-            start="2025-01-01"
+            start=start_date,
+            feed='iex'  # Explicitly specify the free IEX data feed
         )
 
         self.bars = self.client.get_stock_bars(request_params)
@@ -68,7 +72,14 @@ class AnalyzeHMM:
         return self.data
 
     def createFeatures(self, data_df=None):
-        data = self.bars.df.copy() if data_df is None else data_df.copy()
+        # The data source can be a BarSet object (from live trading) which has a .df attribute,
+        # or a raw DataFrame (from the backtester). This handles both cases.
+        if data_df is not None:
+            data = data_df.copy()
+        elif hasattr(self.bars, 'df'): # It's a BarSet object from Alpaca client
+            data = self.bars.df.copy()
+        else: # It's already a DataFrame, passed from the backtester
+            data = self.bars.copy()
         # Calculate returns
         data['Return'] = data['close'].pct_change()
 
@@ -116,8 +127,9 @@ class AnalyzeHMM:
 
         # Analyze state characteristics
         self.state_means = self.data.groupby('Hidden_State')[self.features].mean()
-        print("State Characteristics (Means):")
-        print(self.state_means)
+        if self.verbose:
+            print("State Characteristics (Means):")
+            print(self.state_means)
 
         # Identify state regimes based on returns. The index of this series
         # is the state number, sorted from lowest return to highest.
@@ -134,7 +146,8 @@ class AnalyzeHMM:
         Returns:
             int: The model order with the highest log-likelihood score on the test set.
         """
-        print(f"\n--- Finding Optimal Model Order (1 to {max_order}) ---")
+        if self.verbose:
+            print(f"\n--- Finding Optimal Model Order (1 to {max_order}) ---")
         # We can't split before creating features, as features rely on rolling windows.
         # So we create features on the full dataset first.
         full_data_with_features = self.createFeatures()
@@ -164,13 +177,15 @@ class AnalyzeHMM:
                 # Score the model on the unseen test data
                 score = model.score(test_X)
                 scores.append(score)
-                print(f"  Order {order}: Score = {score:.2f}")
+                if self.verbose:
+                    print(f"  Order {order}: Score = {score:.2f}")
             except Exception as e:
                 print(f"  Order {order}: Failed. Reason: {e}")
                 scores.append(float('-inf')) # Use negative infinity for failed models
 
         best_order = np.argmax(scores) + 1
-        print(f"--- Optimal model order found: {best_order} ---")
+        if self.verbose:
+            print(f"--- Optimal model order found: {best_order} ---")
         return best_order
 
     def predict_next_day_outlook(self):
@@ -223,7 +238,7 @@ class AnalyzeHMM:
         }
 
 if __name__ == "__main__":
-    TICKER_TO_ANALYZE = "TTD"  # Define the ticker once
+    TICKER_TO_ANALYZE = "RBLX"  # Define the ticker once
     N_COMPONENTS = 3
     MAX_ORDER_TO_TEST = 10
 
