@@ -310,7 +310,7 @@ class Trader:
 if __name__ == "__main__":
     # --- General Trader Configuration ---
     # TRADE_QUANTITY = 10    # Replaced by notional, waterfall allocation
-    MAX_POSITIONS = 10    # Maximum number of positions to hold
+    MAX_POSITIONS = 30    # Maximum number of positions to hold
     TOTAL_ALLOCATION_PCT = 0.50 # Use 50% of total equity for this strategy
     # Example of a custom waterfall: top pick gets 25%, second 20%, etc.
     # Must sum to 1.0. The length limits the number of new buys per run.
