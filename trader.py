@@ -32,23 +32,41 @@ class Trader:
     KEY = os.getenv("PAPER_KEY")
     SECRET = os.getenv("PAPER_SEC")
 
-    def __init__(self, strategy: BaseStrategy, trade_qty: int = 1, max_positions: int = 10):
+    def __init__(self, strategy: BaseStrategy, max_positions: int = 10, total_allocation_pct: float = 0.5, waterfall_allocation_pcts: list = None):
         """
         Initializes the trader and the Alpaca trading client.
 
         Args:
             strategy (BaseStrategy): The trading strategy to use for analysis.
-            trade_qty (int): The number of shares to trade in a single order.
             max_positions (int): The maximum number of positions to hold at any time.
+            total_allocation_pct (float): The percentage of total equity to allocate to this strategy (e.g., 0.5 for 50%).
+            waterfall_allocation_pcts (list[float]): A list of percentages for waterfall allocation for new buys.
+                                                     The list length determines the max number of new buys in a single run.
+                                                     If None, a default descending weight allocation is created.
+                                                     The list should sum to 1.0.
         """
         # Use paper=True for paper trading environment
         self.trading_client = TradingClient(self.KEY, self.SECRET, paper=True)
         self.data_client = StockHistoricalDataClient(self.KEY, self.SECRET)
         self.strategy = strategy
-        self.trade_qty = trade_qty
         self.max_positions = max_positions
+        self.total_allocation_pct = total_allocation_pct
+        self.waterfall_allocation_pcts = waterfall_allocation_pcts
         self.sp500_tickers = self._get_sp500_tickers()
         self.held_tickers = set()
+
+        if not (0 < self.total_allocation_pct <= 1.0):
+            raise ValueError("total_allocation_pct must be between 0 and 1.0.")
+
+        if self.waterfall_allocation_pcts is None:
+            # Create a default descending waterfall based on max_positions
+            weights = list(range(self.max_positions, 0, -1))
+            total_weight = sum(weights)
+            self.waterfall_allocation_pcts = [w / total_weight for w in weights]
+            print(f"Using default waterfall allocation for up to {self.max_positions} positions.")
+
+        if abs(sum(self.waterfall_allocation_pcts) - 1.0) > 1e-9:
+            raise ValueError("waterfall_allocation_pcts must sum to 1.0.")
 
     def _get_sp500_tickers(self):
         """Fetches the list of S&P 500 tickers from Wikipedia."""
@@ -205,46 +223,73 @@ class Trader:
         # Sort by predicted mean return, descending
         sorted_predictions = sorted(positive_predictions, key=lambda x: x['predicted_state_mean_return'], reverse=True)
 
-        # Print the top 20 ranked signals found during the scan, regardless of trading action
         if sorted_predictions:
             print("\n--- Top 20 Ranked Positive Signals ---")
             # The strength metric is 'predicted_state_mean_return'
             for i, pick in enumerate(sorted_predictions[:20]):
                 print(f"  {i+1:2d}. {pick['ticker']:<6}: Strength = {pick['predicted_state_mean_return']:.4f}")
 
-        # Recalculate held positions after sells have been executed
-        current_positions = self.trading_client.get_all_positions()
-        self.held_tickers = {p.symbol for p in current_positions if p.asset_class == AssetClass.US_EQUITY} # Update held_tickers after sells
-        num_held_positions = len(self.held_tickers)
-        slots_to_fill = self.max_positions - num_held_positions
+        # --- Calculate capital for new buys based on total allocation ---
+        try:
+            account = self.trading_client.get_account()
+            total_equity = float(account.equity)
+            target_portfolio_value = total_equity * self.total_allocation_pct
 
-        if slots_to_fill <= 0:
-            print(f"\nPortfolio is full ({num_held_positions}/{self.max_positions} positions). No new buy orders will be placed.")
+            current_positions = self.trading_client.get_all_positions()
+            self.held_tickers = {p.symbol for p in current_positions if p.asset_class == AssetClass.US_EQUITY}
+            current_positions_value = sum(float(p.market_value) for p in current_positions)
+
+            cash_for_new_buys = target_portfolio_value - current_positions_value
+            num_held_positions = len(self.held_tickers)
+            slots_to_fill = self.max_positions - num_held_positions
+
+            print(f"\nAccount Equity: ${total_equity:,.2f}")
+            print(f"Target Allocation ({self.total_allocation_pct:.0%}): ${target_portfolio_value:,.2f}")
+            print(f"Current Position Value: ${current_positions_value:,.2f}")
+            print(f"Cash available for new buys: ${cash_for_new_buys:,.2f}")
+
+        except APIError as e:
+            print(f"Could not get account details to calculate allocation: {e}")
+            return
+
+        if cash_for_new_buys <= 1 or slots_to_fill <= 0: # Need at least $1 for notional orders
+            print(f"\nPortfolio is full or strategy is fully allocated. No new buy orders will be placed.")
             top_picks = []
         else:
-            print(f"\nPortfolio has {num_held_positions}/{self.max_positions} positions. Looking to fill {slots_to_fill} slot(s).")
-            # Filter out stocks already held and then pick the top ones
+            print(f"\nPortfolio has {num_held_positions}/{self.max_positions} positions. Looking to fill up to {slots_to_fill} slot(s).")
+            # Filter out stocks already held
             available_for_buy = [p for p in sorted_predictions if p['ticker'] not in self.held_tickers]
-            top_picks = available_for_buy[:slots_to_fill]
+            # Limit buys by available slots and waterfall definition
+            num_buys_to_make = min(len(available_for_buy), slots_to_fill, len(self.waterfall_allocation_pcts))
+            top_picks = available_for_buy[:num_buys_to_make]
 
         if top_picks:
-            print(f"\n--- Top {len(top_picks)} Picks for Trading ---")
-            for pick in top_picks:
-                print(f"  - {pick['ticker']}: Predicted State Avg. Return = {pick['predicted_state_mean_return']:.4f} (Last Return: {pick['last_return']:.4f})")
+            print(f"\n--- Top {len(top_picks)} Picks for Trading (Waterfall Allocation) ---")
+            for i, pick in enumerate(top_picks):
+                allocation_pct = self.waterfall_allocation_pcts[i]
+                notional_value = cash_for_new_buys * allocation_pct
+                print(f"  - {pick['ticker']}: Allocating {allocation_pct:.1%} of available cash (${notional_value:,.2f})")
 
             print("\n--- Executing Buy Orders ---")
-            for pick in top_picks:
+            for i, pick in enumerate(top_picks):
                 ticker = pick['ticker']
-                print(f"Decision: BUY {ticker}. Placing market order for {self.trade_qty} share(s).")
+                allocation_pct = self.waterfall_allocation_pcts[i]
+                notional_value = cash_for_new_buys * allocation_pct
+
+                if notional_value < 1: # Alpaca requires at least $1 for notional orders
+                    print(f"  -> Skipping BUY for {ticker}, allocated value ${notional_value:.2f} is less than $1.")
+                    continue
+
+                print(f"Decision: BUY {ticker}. Placing notional market order for approx. ${notional_value:.2f}.")
                 try:
                     market_order_data = MarketOrderRequest(
                         symbol=ticker,
-                        qty=self.trade_qty,
+                        notional=notional_value,
                         side=OrderSide.BUY,
                         time_in_force=TimeInForce.DAY
                     )
                     self.trading_client.submit_order(order_data=market_order_data)
-                    print(f"  -> Successfully submitted BUY order for {self.trade_qty} of {ticker}.")
+                    print(f"  -> Successfully submitted BUY order for {ticker}.")
                 except APIError as e:
                     print(f"  -> Failed to submit order for {ticker}. Reason: {e}")
 
@@ -264,9 +309,12 @@ class Trader:
 
 if __name__ == "__main__":
     # --- General Trader Configuration ---
-    TRADE_QUANTITY = 5    # Number of shares to trade for each new position
+    # TRADE_QUANTITY = 10    # Replaced by notional, waterfall allocation
     MAX_POSITIONS = 10    # Maximum number of positions to hold
-
+    TOTAL_ALLOCATION_PCT = 0.50 # Use 50% of total equity for this strategy
+    # Example of a custom waterfall: top pick gets 25%, second 20%, etc.
+    # Must sum to 1.0. The length limits the number of new buys per run.
+    WATERFALL_ALLOCATION_PCTS = [0.25, 0.20, 0.15, 0.10, 0.10, 0.05, 0.05, 0.05, 0.025, 0.025]
     # --- Strategy Selection ---
     # Choose which strategy to run by uncommenting one of the blocks below.
 
@@ -293,7 +341,12 @@ if __name__ == "__main__":
     # --- Trader Initialization and Execution ---
     # 1. Create the trader and pass the chosen strategy to it
     print(f"Starting Trader with {active_strategy.__class__.__name__}...")
-    trader = Trader(strategy=active_strategy, trade_qty=TRADE_QUANTITY, max_positions=MAX_POSITIONS)
+    trader = Trader(
+        strategy=active_strategy,
+        max_positions=MAX_POSITIONS,
+        total_allocation_pct=TOTAL_ALLOCATION_PCT,
+        waterfall_allocation_pcts=WATERFALL_ALLOCATION_PCTS
+    )
 
     # 2. Run the trader
     trader.run_scanner_and_trade()
