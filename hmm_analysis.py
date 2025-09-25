@@ -35,6 +35,7 @@ class AnalyzeHMM:
         self.model = None
         self.quantizer = None
         self.state_means = None
+        self.state_stds = None
         self.state_regimes = None
 
         if self.model_order < 1:
@@ -127,9 +128,13 @@ class AnalyzeHMM:
 
         # Analyze state characteristics
         self.state_means = self.data.groupby('Hidden_State')[self.features].mean()
+        self.state_stds = self.data.groupby('Hidden_State')[self.features].std()
+
         if self.verbose:
             print("State Characteristics (Means):")
             print(self.state_means)
+            print("\nState Characteristics (Standard Deviations):")
+            print(self.state_stds)
 
         # Identify state regimes based on returns. The index of this series
         # is the state number, sorted from lowest return to highest.
@@ -197,6 +202,7 @@ class AnalyzeHMM:
                   - 'outlook': "positive", "negative", or "similar"
                   - 'last_return': The actual return of the last day.
                   - 'predicted_state_mean_return': The historical average return of the predicted state.
+                  - 'predicted_state_std_return': The historical standard deviation of returns of the predicted state.
                   - 'comparison': "higher", "lower", or "the same".
                   - 'predicted_state': The predicted hidden state for the next day.
         """
@@ -208,6 +214,7 @@ class AnalyzeHMM:
         transition_matrix = self.model.transmat_
         predicted_next_state = np.argmax(transition_matrix[last_state])
         predicted_state_mean_return = self.state_means.loc[predicted_next_state, 'Return']
+        predicted_state_std_return = self.state_stds.loc[predicted_next_state, 'Return']
 
         # Classify the predicted state's outlook based on its historical return
         # self.state_regimes is sorted by return, from lowest to highest
@@ -233,6 +240,7 @@ class AnalyzeHMM:
             'outlook': outlook,
             'last_return': last_return,
             'predicted_state_mean_return': predicted_state_mean_return,
+            'predicted_state_std_return': predicted_state_std_return,
             'comparison': comparison,
             'predicted_state': predicted_next_state
         }
@@ -267,3 +275,4 @@ if __name__ == "__main__":
     print(f"Tomorrow's return is predicted to be {prediction['comparison']} than today's.")
     print(f" -> Today's Actual Return: {prediction['last_return']:.4f}")
     print(f" -> Predicted State's Avg. Return: {prediction['predicted_state_mean_return']:.4f}")
+    print(f" -> Predicted State's Return Std. Dev.: {prediction['predicted_state_std_return']:.4f}")

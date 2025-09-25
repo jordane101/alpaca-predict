@@ -32,7 +32,7 @@ class Trader:
     KEY = os.getenv("PAPER_KEY")
     SECRET = os.getenv("PAPER_SEC")
 
-    def __init__(self, strategy: BaseStrategy, max_positions: int = 10, total_allocation_pct: float = 0.5, waterfall_allocation_pcts: list = None):
+    def __init__(self, strategy: BaseStrategy, max_positions: int = 10, total_allocation_pct: float = 0.5, waterfall_allocation_pcts: list = None, stop_loss_pct: float = None, take_profit_pct: float = None):
         """
         Initializes the trader and the Alpaca trading client.
 
@@ -44,6 +44,8 @@ class Trader:
                                                      The list length determines the max number of new buys in a single run.
                                                      If None, a default descending weight allocation is created.
                                                      The list should sum to 1.0.
+            stop_loss_pct (float, optional): The percentage loss at which to trigger a stop-loss sell (e.g., 0.05 for 5%). Defaults to None.
+            take_profit_pct (float, optional): The percentage gain at which to trigger a take-profit sell (e.g., 0.10 for 10%). Defaults to None.
         """
         # Use paper=True for paper trading environment
         self.trading_client = TradingClient(self.KEY, self.SECRET, paper=True)
@@ -51,6 +53,8 @@ class Trader:
         self.strategy = strategy
         self.max_positions = max_positions
         self.total_allocation_pct = total_allocation_pct
+        self.stop_loss_pct = stop_loss_pct
+        self.take_profit_pct = take_profit_pct
         self.waterfall_allocation_pcts = waterfall_allocation_pcts
         self.sp500_tickers = self._get_sp500_tickers()
         self.held_tickers = set()
@@ -116,7 +120,7 @@ class Trader:
                 print(f"  -> HOLD SIGNAL for {ticker} (Outlook: {outlook}).")
                 return 'no_action', ticker
             elif not is_held and ticker in self.sp500_tickers and outlook == 'positive':
-                print(f"  -> BUY SIGNAL for {ticker}. Avg Return: {data['predicted_state_mean_return']:.4f}")
+                print(f"  -> BUY SIGNAL for {ticker}. Ranking Strength: {data['ranking_strength']:.4f}")
                 return 'positive', data
             else:
                 # Covers: not held and not positive, or not in S&P500.
@@ -142,6 +146,29 @@ class Trader:
         except APIError as e:
             print(f"Could not get current positions: {e}")
             self.held_tickers = set()
+            positions = [] # Ensure positions is a list on failure
+
+        # --- Check for stop-loss / take-profit triggers before analysis ---
+        stop_loss_sells = []
+        take_profit_sells = []
+        if (self.stop_loss_pct is not None or self.take_profit_pct is not None) and positions:
+            print("\n--- Checking for Stop-Loss and Take-Profit Triggers ---")
+            for p in positions:
+                if p.asset_class != AssetClass.US_EQUITY:
+                    continue
+
+                unrealized_plpc = float(p.unrealized_plpc) # profit/loss percentage
+
+                # Check for stop-loss
+                if self.stop_loss_pct is not None and unrealized_plpc <= -self.stop_loss_pct:
+                    print(f"  -> STOP-LOSS triggered for {p.symbol} (Loss: {unrealized_plpc:.2%}).")
+                    stop_loss_sells.append(p.symbol)
+                    continue # A position can't be both a stop-loss and take-profit sell in the same run
+
+                # Check for take-profit
+                if self.take_profit_pct is not None and unrealized_plpc >= self.take_profit_pct:
+                    print(f"  -> TAKE-PROFIT triggered for {p.symbol} (Gain: {unrealized_plpc:.2%}).")
+                    take_profit_sells.append(p.symbol)
 
         # We analyze all S&P 500 tickers for buy signals, and all held tickers for sell signals.
         # A union of both sets ensures we cover everything.
@@ -209,25 +236,28 @@ class Trader:
 
         # --- Execute Trades based on analysis ---
         # 1. Process sells first to free up capital and position slots
-        self._execute_sells(sell_signals)
+        # Combine strategy-based sells with stop-loss/take-profit sells
+        all_sells_to_make = set(sell_signals) | set(stop_loss_sells) | set(take_profit_sells)
+        self._execute_sells(list(all_sells_to_make))
 
         print(f"\n--- Analysis Complete ---")
         print(f"Found {len(positive_predictions)} stocks with a positive outlook.")
         print(f"Found {len(sell_signals)} stocks with a negative outlook (sell signals).")
+        print(f"Triggered {len(stop_loss_sells)} stop-loss sells and {len(take_profit_sells)} take-profit sells.")
 
         if not positive_predictions:
             print("No stocks with positive outlook found. No trades will be placed.")
             return
 
         # --- Prioritize and Execute Buys ---
-        # Sort by predicted mean return, descending
-        sorted_predictions = sorted(positive_predictions, key=lambda x: x['predicted_state_mean_return'], reverse=True)
+        # Sort by the chosen ranking metric (e.g., Sharpe ratio or mean return), descending
+        sorted_predictions = sorted(positive_predictions, key=lambda x: x['ranking_strength'], reverse=True)
 
         if sorted_predictions:
             print("\n--- Top 20 Ranked Positive Signals ---")
-            # The strength metric is 'predicted_state_mean_return'
+            # The strength metric is now 'ranking_strength'
             for i, pick in enumerate(sorted_predictions[:20]):
-                print(f"  {i+1:2d}. {pick['ticker']:<6}: Strength = {pick['predicted_state_mean_return']:.4f}")
+                print(f"  {i+1:2d}. {pick['ticker']:<6}: Strength = {pick['ranking_strength']:.4f}")
 
         # --- Calculate capital for new buys based on total allocation ---
         try:
@@ -237,7 +267,7 @@ class Trader:
 
             current_positions = self.trading_client.get_all_positions()
             self.held_tickers = {p.symbol for p in current_positions if p.asset_class == AssetClass.US_EQUITY}
-            current_positions_value = sum(float(p.market_value) for p in current_positions)
+            current_positions_value = sum(float(p.market_value) for p in current_positions if p.asset_class == AssetClass.US_EQUITY)
 
             cash_for_new_buys = target_portfolio_value - current_positions_value
             num_held_positions = len(self.held_tickers)
@@ -274,7 +304,7 @@ class Trader:
             for i, pick in enumerate(top_picks):
                 ticker = pick['ticker']
                 allocation_pct = self.waterfall_allocation_pcts[i]
-                notional_value = cash_for_new_buys * allocation_pct
+                notional_value = round(cash_for_new_buys * allocation_pct, 2)
 
                 if notional_value < 1: # Alpaca requires at least $1 for notional orders
                     print(f"  -> Skipping BUY for {ticker}, allocated value ${notional_value:.2f} is less than $1.")
@@ -315,27 +345,34 @@ if __name__ == "__main__":
     # Example of a custom waterfall: top pick gets 25%, second 20%, etc.
     # Must sum to 1.0. The length limits the number of new buys per run.
     WATERFALL_ALLOCATION_PCTS = [0.25, 0.20, 0.15, 0.10, 0.10, 0.05, 0.05, 0.05, 0.025, 0.025]
+
+    # --- Risk Management Configuration ---
+    STOP_LOSS_PCT = 0.05 # Sell if a position drops by 5%
+    TAKE_PROFIT_PCT = 0.10 # Sell if a position gains 10%
+
     # --- Strategy Selection ---
     # Choose which strategy to run by uncommenting one of the blocks below.
 
     # == Option 1: HMM Strategy (Default) ==
-    # N_HMM_COMPONENTS = 3
-    # MODEL_ORDER = 1
-    # OPTIMIZE_ORDER_PER_STOCK = False
-    # MAX_ORDER_TO_TEST = 5
-    # print("Configuring HMM Strategy...")
-    # active_strategy = HMMStrategy(
-    #     n_components=N_HMM_COMPONENTS,
-    #     model_order=MODEL_ORDER,
-    #     optimize_order=OPTIMIZE_ORDER_PER_STOCK,
-    #     max_order_to_test=MAX_ORDER_TO_TEST
-    # )
+    N_HMM_COMPONENTS = 3
+    MODEL_ORDER = 1
+    OPTIMIZE_ORDER_PER_STOCK = False
+    MAX_ORDER_TO_TEST = 5
+    RANKING_METRIC = 'sharpe' # 'sharpe' or 'return'
+    print("Configuring HMM Strategy...")
+    active_strategy = HMMStrategy(
+        n_components=N_HMM_COMPONENTS,
+        model_order=MODEL_ORDER,
+        optimize_order=OPTIMIZE_ORDER_PER_STOCK,
+        max_order_to_test=MAX_ORDER_TO_TEST,
+        ranking_metric=RANKING_METRIC
+    )
 
     # == Option 2: Donchian Breakout Strategy ==
-    from strategies import DonchianBreakoutStrategy
-    DONCHIAN_PERIOD = 20 # 20-day breakout is a classic
-    print("Configuring Donchian Breakout Strategy...")
-    active_strategy = DonchianBreakoutStrategy(period=DONCHIAN_PERIOD)
+    # from strategies import DonchianBreakoutStrategy
+    # DONCHIAN_PERIOD = 20 # 20-day breakout is a classic
+    # print("Configuring Donchian Breakout Strategy...")
+    # active_strategy = DonchianBreakoutStrategy(period=DONCHIAN_PERIOD)
 
 
     # --- Trader Initialization and Execution ---
@@ -345,7 +382,9 @@ if __name__ == "__main__":
         strategy=active_strategy,
         max_positions=MAX_POSITIONS,
         total_allocation_pct=TOTAL_ALLOCATION_PCT,
-        waterfall_allocation_pcts=WATERFALL_ALLOCATION_PCTS
+        waterfall_allocation_pcts=WATERFALL_ALLOCATION_PCTS,
+        stop_loss_pct=STOP_LOSS_PCT,
+        take_profit_pct=TAKE_PROFIT_PCT
     )
 
     # 2. Run the trader

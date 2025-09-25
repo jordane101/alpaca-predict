@@ -49,7 +49,7 @@ class HMMStrategy(BaseStrategy):
     """
     A trading strategy that uses a Hidden Markov Model to predict market regimes.
     """
-    def __init__(self, n_components: int = 3, model_order: int = 1, optimize_order: bool = False, max_order_to_test: int = 10):
+    def __init__(self, n_components: int = 3, model_order: int = 1, optimize_order: bool = False, max_order_to_test: int = 10, ranking_metric: str = 'sharpe'):
         """
         Initializes the HMM-based strategy.
 
@@ -58,11 +58,15 @@ class HMMStrategy(BaseStrategy):
             model_order (int): The default order of the Markov model.
             optimize_order (bool): If True, finds the optimal order for each stock individually.
             max_order_to_test (int): The maximum order to test when optimizing.
+            ranking_metric (str): The metric to rank positive signals ('sharpe' or 'return').
         """
         self.n_components = n_components
         self.model_order = model_order
         self.optimize_order = optimize_order
         self.max_order_to_test = max_order_to_test
+        if ranking_metric not in ['sharpe', 'return']:
+            raise ValueError("ranking_metric must be either 'sharpe' or 'return'.")
+        self.ranking_metric = ranking_metric
 
     def analyze(self, ticker: str, bars_data: pd.DataFrame):
         """
@@ -95,6 +99,15 @@ class HMMStrategy(BaseStrategy):
         prediction = analyzer.predict_next_day_outlook()
         outlook = prediction['outlook']
         prediction['ticker'] = ticker
+
+        # 3. Calculate the ranking strength based on the chosen metric
+        if self.ranking_metric == 'sharpe':
+            mean_return = prediction['predicted_state_mean_return']
+            std_return = prediction['predicted_state_std_return']
+            # Add a small epsilon to avoid division by zero for states with no volatility
+            prediction['ranking_strength'] = mean_return / (std_return + 1e-9)
+        else: # 'return'
+            prediction['ranking_strength'] = prediction['predicted_state_mean_return']
 
         return outlook, prediction
 
