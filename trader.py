@@ -31,8 +31,11 @@ if __name__ == "__main__":
             ),
             "max_positions": 30,
             "total_allocation_pct": 0.50, # Use 50% of total equity for this agent
-            "stop_loss_pct": 0.05,        # Sell if a position drops 5%
-            "take_profit_pct": 0.10,      # Sell if a position gains 10%
+            # NOTE: HMMStrategy now uses dynamic stop-loss and take-profit targets.
+            # These static values are used as fallbacks by the orchestrator.
+            "stop_loss_pct": 0.05,
+            "take_profit_pct": 0.10,
+            "max_analysis_workers": 4,    # Limit CPU usage for analysis. Default is os.cpu_count() - 1.
         }
         # ,{
         #     "name": "Donchian_Breakout_Agent",
@@ -56,6 +59,24 @@ if __name__ == "__main__":
         'timezone': 'America/New_York'
     }
 
+    async def main(orchestrator, schedule_config):
+        """The main async entry point for the trader."""
+        try:
+            print("--- Starting Orchestrator Event Loop ---")
+            print("Press Ctrl+C to stop.")
+            # Shield the orchestrator's start method from cancellation. When Ctrl+C
+            # is pressed, asyncio.run cancels this 'main' task. The 'await shield'
+            # raises a CancelledError, but the orchestrator.start() task is NOT
+            # cancelled. This allows our 'finally' block to perform a clean shutdown.
+            await asyncio.shield(orchestrator.start(schedule_config=schedule_config))
+        except asyncio.CancelledError:
+            # This is the expected exception when Ctrl+C is pressed.
+            print("\nShutdown signal received. Proceeding with graceful shutdown.")
+            pass
+        finally:
+            # This ensures graceful shutdown of the orchestrator's components.
+            await orchestrator.shutdown()
+
     # --- Orchestrator Initialization and Execution ---
     # The orchestrator takes the list of agent configurations and manages them.
     print("--- Initializing Orchestrator ---")
@@ -63,10 +84,9 @@ if __name__ == "__main__":
 
     # Start the orchestrator's continuous monitoring and trading loop.
     try:
-        print("--- Starting Orchestrator Event Loop ---")
-        print("Press Ctrl+C to stop.")
-        asyncio.run(orchestrator.start(schedule_config=SCHEDULE_CONFIG))
+        asyncio.run(main(orchestrator, SCHEDULE_CONFIG))
     except KeyboardInterrupt:
-        print("\nOrchestrator stopped by user.")
+        # This handles Ctrl+C if it's pressed before the event loop even starts.
+        print("\nOrchestrator stopped by user before starting.")
     finally:
         print("\nTrader script finished.")

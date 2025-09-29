@@ -1,1 +1,152 @@
-{}
+{
+    "STT": {
+        "owner": "HMM_Momentum_Agent",
+        "stop_loss_price": 116.12431933614522,
+        "take_profit_price": 117.7472193387425
+    },
+    "HWM": {
+        "owner": "HMM_Momentum_Agent",
+        "stop_loss_price": 189.33002865903208,
+        "take_profit_price": 193.09732987190168
+    },
+    "TRMB": {
+        "owner": "HMM_Momentum_Agent",
+        "stop_loss_price": 81.00988597007945,
+        "take_profit_price": 82.41898002486042
+    },
+    "APH": {
+        "owner": "HMM_Momentum_Agent",
+        "stop_loss_price": 118.18185618434022,
+        "take_profit_price": 122.06992820295909
+    },
+    "ORCL": {
+        "owner": "HMM_Momentum_Agent",
+        "stop_loss_price": 279.3481888670542,
+        "take_profit_price": 283.9922543339553
+    },
+    "AEE": {
+        "owner": "HMM_Momentum_Agent",
+        "stop_loss_price": 102.38142711473446,
+        "take_profit_price": 103.97245471650817
+    },
+    "EQT": {
+        "owner": "HMM_Momentum_Agent",
+        "stop_loss_price": 53.58118449739414,
+        "take_profit_price": 54.7933949234131
+    },
+    "EXC": {
+        "owner": "HMM_Momentum_Agent",
+        "stop_loss_price": 43.69596496936618,
+        "take_profit_price": 44.43271652159
+    },
+    "EBAY": {
+        "owner": "HMM_Momentum_Agent",
+        "stop_loss_price": 89.87906681998645,
+        "take_profit_price": 91.52756524188047
+    },
+    "PANW": {
+        "owner": "HMM_Momentum_Agent",
+        "stop_loss_price": 199.441284563125,
+        "take_profit_price": 205.2661274016835
+    },
+    "LNT": {
+        "owner": "HMM_Momentum_Agent",
+        "stop_loss_price": 66.03486880026327,
+        "take_profit_price": 66.98719006759482
+    },
+    "TECH": {
+        "owner": "HMM_Momentum_Agent",
+        "stop_loss_price": 51.13735864791176,
+        "take_profit_price": 52.526377387598835
+    },
+    "GRMN": {
+        "owner": "HMM_Momentum_Agent",
+        "stop_loss_price": 243.34786280221664,
+        "take_profit_price": 246.14893958502273
+    },
+    "ALB": {
+        "owner": "HMM_Momentum_Agent",
+        "stop_loss_price": 83.49684509201724,
+        "take_profit_price": 87.81781224638881
+    },
+    "TTWO": {
+        "owner": "HMM_Momentum_Agent",
+        "stop_loss_price": 257.55435972052805,
+        "take_profit_price": 260.71176010809285
+    },
+    "EG": {
+        "owner": "HMM_Momentum_Agent",
+        "stop_loss_price": 341.20301337839567,
+        "take_profit_price": 347.24026124801225
+    },
+    "TMUS": {
+        "owner": "HMM_Momentum_Agent",
+        "stop_loss_price": 235.06657685726037,
+        "take_profit_price": 238.68878058773961
+    },
+    "AFL": {
+        "owner": "HMM_Momentum_Agent",
+        "stop_loss_price": 110.32264684028834,
+        "take_profit_price": 111.5900613776868
+    },
+    "MTB": {
+        "owner": "HMM_Momentum_Agent",
+        "stop_loss_price": 195.45674612243482,
+        "take_profit_price": 198.93462246131963
+    },
+    "BLDR": {
+        "owner": "HMM_Momentum_Agent",
+        "stop_loss_price": 114.81050713627975,
+        "take_profit_price": 120.68655505915962
+    },
+    "AMT": {
+        "owner": "HMM_Momentum_Agent",
+        "stop_loss_price": 191.02542733510995,
+        "take_profit_price": 195.32070226539744
+    },
+    "DECK": {
+        "owner": "HMM_Momentum_Agent",
+        "stop_loss_price": 99.42927084000196,
+        "take_profit_price": 104.09956036046405
+    },
+    "ECL": {
+        "owner": "HMM_Momentum_Agent",
+        "stop_loss_price": 270.5325280986053,
+        "take_profit_price": 273.32134429025047
+    },
+    "ATO": {
+        "owner": "HMM_Momentum_Agent",
+        "stop_loss_price": 168.10566573815788,
+        "take_profit_price": 169.85675846979112
+    },
+    "DELL": {
+        "owner": "HMM_Momentum_Agent",
+        "stop_loss_price": 131.01138683059247,
+        "take_profit_price": 134.4713843950954
+    },
+    "PLD": {
+        "owner": "HMM_Momentum_Agent",
+        "stop_loss_price": 112.63049144901512,
+        "take_profit_price": 114.56306755082853
+    },
+    "KKR": {
+        "owner": "HMM_Momentum_Agent",
+        "stop_loss_price": 132.24154929004126,
+        "take_profit_price": 134.88387734410955
+    },
+    "ESS": {
+        "owner": "HMM_Momentum_Agent",
+        "stop_loss_price": 262.70006491751553,
+        "take_profit_price": 266.8904462190198
+    },
+    "HAS": {
+        "owner": "HMM_Momentum_Agent",
+        "stop_loss_price": 75.69885060423675,
+        "take_profit_price": 77.18189147328951
+    },
+    "DAY": {
+        "owner": "HMM_Momentum_Agent",
+        "stop_loss_price": 65.8862378800489,
+        "take_profit_price": 69.36465340259387
+    }
+}

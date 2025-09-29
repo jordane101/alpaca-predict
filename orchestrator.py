@@ -13,6 +13,7 @@ from alpaca.trading.client import TradingClient
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.live.stock import StockDataStream
 from alpaca.trading.requests import MarketOrderRequest, ClosePositionRequest
+from alpaca.data.requests import StockLatestTradeRequest as LatestTradeRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.common.exceptions import APIError
 from alpaca.data.enums import DataFeed
@@ -40,6 +41,7 @@ class Orchestrator:
         self.trading_client = TradingClient(self.KEY, self.SECRET, paper=True)
         self.data_client = StockHistoricalDataClient(self.KEY, self.SECRET)
         self.stream_client = StockDataStream(self.KEY, self.SECRET, feed=DataFeed.IEX)
+        self.scheduler = AsyncIOScheduler()
 
         self.agents = [
             TradingAgent(
@@ -52,6 +54,7 @@ class Orchestrator:
         self.position_ownership = self._load_ownership()
         self.live_positions = {} # A cache of symbol -> position object
         self.triggered_sells = set() # A set to prevent duplicate real-time triggers
+        self.current_subscriptions = set()
         print(f"Initialized {len(self.agents)} agents: {[agent.name for agent in self.agents]}")
 
     def _load_ownership(self):
@@ -99,14 +102,45 @@ class Orchestrator:
         await self.run_analysis_cycle()
 
         # 2. Set up the scheduler for recurring analysis
-        scheduler = AsyncIOScheduler()
-        scheduler.add_job(self.run_analysis_cycle, 'cron', **schedule_config)
-        scheduler.start()
+        self.scheduler.add_job(self.run_analysis_cycle, 'cron', **schedule_config)
+        self.scheduler.start()
         print(f"\nAnalysis cycle scheduled. First run will be at the next configured time: {schedule_config}")
+        loop = asyncio.get_running_loop()
 
-        # 3. Start the WebSocket stream for real-time monitoring
-        print("Connecting to WebSocket for real-time trade monitoring...")
-        await self.stream_client.run()
+        # 3. Start a resilient WebSocket stream for real-time monitoring.
+        # This loop ensures that if the connection drops for any reason, it will attempt to reconnect.
+        is_first_attempt = True
+        while True:
+            try:
+                print("Connecting to WebSocket for real-time trade monitoring...")
+                # Re-create the stream client to ensure a clean state on each connection attempt.
+                self.stream_client = StockDataStream(self.KEY, self.SECRET, feed=DataFeed.IEX)
+
+                # Reset our subscription state since we have a new client
+                self.current_subscriptions = set()
+
+                # Subscribe to existing positions before running
+                await self._update_subscriptions()
+
+                # Run the blocking stream.run() in a separate thread to not block the main event loop.
+                await loop.run_in_executor(None, self.stream_client.run)
+
+                # If run() exits cleanly (e.g., from shutdown()), break the loop.
+                print("WebSocket stream has been closed. Exiting monitoring loop.")
+                break
+            except (asyncio.CancelledError, KeyboardInterrupt):
+                print("\nWebSocket stream task cancelled. Proceeding to shutdown.")
+                break
+            except Exception as e:
+                print(f"\nWebSocket stream encountered an error: {e}.")
+                if is_first_attempt:
+                    print("This can happen on initial startup. Retrying in 5 seconds...")
+                    await asyncio.sleep(5)
+                else:
+                    print("Reconnecting in 30 seconds...")
+                    await asyncio.sleep(30)
+                
+                is_first_attempt = False
 
     async def run_analysis_cycle(self):
         """
@@ -155,6 +189,20 @@ class Orchestrator:
             self._save_ownership()
             print("\n" + "="*20 + " Scheduled Analysis Cycle Complete " + "="*20)
 
+    async def shutdown(self):
+        """Gracefully shuts down all components."""
+        print("\n--- Shutting Down Orchestrator ---")
+        if self.scheduler.running:
+            self.scheduler.shutdown(wait=False)
+            print("Scheduler has been shut down.")
+
+        # The stream client's `run()` method will exit when `close()` is called.
+        await self.stream_client.close()
+        print("WebSocket stream client has been closed.")
+
+        # Save final state
+        self._save_ownership()
+
     async def on_trade(self, trade):
         """
         Callback for real-time trade updates from the WebSocket.
@@ -202,7 +250,8 @@ class Orchestrator:
                     del self.position_ownership[symbol]
                 if symbol in self.live_positions:
                     del self.live_positions[symbol]
-                await self.stream_client.unsubscribe_trades(symbol)
+                self.stream_client.unsubscribe_trades(symbol)
+                self.current_subscriptions.discard(symbol)
                 self._save_ownership()
 
     async def _resolve_and_execute_trades(self, all_decisions):
@@ -300,7 +349,9 @@ class Orchestrator:
                 time_in_force=TimeInForce.DAY
             )
             loop = asyncio.get_running_loop()
-            await loop.run_in_executor(None, self.trading_client.submit_order, order_data=market_order_data)
+            # Pass market_order_data as a positional argument, as run_in_executor
+            # does not accept keyword arguments for the target function.
+            await loop.run_in_executor(None, self.trading_client.submit_order, market_order_data)
             
             # On successful submission, record ownership with targets
             self.position_ownership[ticker] = {
@@ -318,9 +369,14 @@ class Orchestrator:
         """Fetches the latest trade price for a ticker."""
         try:
             loop = asyncio.get_running_loop()
-            latest_trade = await loop.run_in_executor(None, self.data_client.get_stock_latest_trade, ticker, DataFeed.IEX)
-            if latest_trade:
-                return latest_trade.price
+            # Explicitly create a request object. The version of the library
+            # being used appears to require a request object rather than
+            # accepting the ticker as a string directly for this method.
+            request_params = LatestTradeRequest(symbol_or_symbols=ticker, feed=DataFeed.IEX)
+            latest_trade_map = await loop.run_in_executor(None, self.data_client.get_stock_latest_trade, request_params)
+            # The result is a dictionary mapping symbols to trade objects, even for a single symbol.
+            if latest_trade_map and ticker in latest_trade_map:
+                return latest_trade_map[ticker].price
         except Exception as e:
             print(f"Could not fetch latest price for {ticker}: {e}")
         return None
@@ -330,7 +386,8 @@ class Orchestrator:
         Syncs the WebSocket subscriptions with the current positions.
         """
         print("\nUpdating WebSocket subscriptions...")
-        current_subs = set(self.stream_client.get_trade_subscriptions())
+        # We must track subscription state ourselves, as the client object can be recreated.
+        current_subs = self.current_subscriptions
         desired_subs = set(self.position_ownership.keys())
 
         to_sub = desired_subs - current_subs
@@ -338,8 +395,10 @@ class Orchestrator:
 
         if to_sub:
             print(f"  Subscribing to: {list(to_sub)}")
-            await self.stream_client.subscribe_trades(self.on_trade, *to_sub)
+            self.stream_client.subscribe_trades(self.on_trade, *to_sub)
+            self.current_subscriptions.update(to_sub)
         if to_unsub:
             print(f"  Unsubscribing from: {list(to_unsub)}")
-            await self.stream_client.unsubscribe_trades(*to_unsub)
+            self.stream_client.unsubscribe_trades(*to_unsub)
+            self.current_subscriptions.difference_update(to_unsub)
         print("Subscriptions are up to date.")

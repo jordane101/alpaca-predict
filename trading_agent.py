@@ -63,7 +63,7 @@ class TradingAgent:
     defined capital allocation.
     """
 
-    def __init__(self, name: str, strategy: BaseStrategy, trading_client: TradingClient, data_client: StockHistoricalDataClient, max_positions: int = 10, total_allocation_pct: float = 0.5, waterfall_allocation_pcts: list = None, stop_loss_pct: float = None, take_profit_pct: float = None):
+    def __init__(self, name: str, strategy: BaseStrategy, trading_client: TradingClient, data_client: StockHistoricalDataClient, max_positions: int = 10, total_allocation_pct: float = 0.5, waterfall_allocation_pcts: list = None, stop_loss_pct: float = None, take_profit_pct: float = None, max_analysis_workers: int = 8):
         """
         Initializes the agent and the Alpaca trading client.
 
@@ -80,6 +80,7 @@ class TradingAgent:
                                                      The list should sum to 1.0.
             stop_loss_pct (float, optional): The percentage loss at which to trigger a stop-loss sell (e.g., 0.05 for 5%). Defaults to None.
             take_profit_pct (float, optional): The percentage gain at which to trigger a take-profit sell (e.g., 0.10 for 10%). Defaults to None.
+            max_analysis_workers (int, optional): The max number of processes to use for analysis. Defaults to os.cpu_count() - 1.
         """
         self.name = name
         self.trading_client = trading_client
@@ -90,6 +91,7 @@ class TradingAgent:
         self.stop_loss_pct = stop_loss_pct
         self.take_profit_pct = take_profit_pct
         self.waterfall_allocation_pcts = waterfall_allocation_pcts
+        self.max_analysis_workers = max_analysis_workers
         self.sp500_tickers = self._get_sp500_tickers()
 
         if not (0 < self.total_allocation_pct <= 1.0):
@@ -178,7 +180,13 @@ class TradingAgent:
         BATCH_SIZE = 100
         ticker_batches = [tickers_to_analyze[i:i + BATCH_SIZE] for i in range(0, len(tickers_to_analyze), BATCH_SIZE)]
 
-        print(f"Starting market scan for {len(tickers_to_analyze)} tickers...")
+        num_workers = self.max_analysis_workers
+        if num_workers is None:
+            # Default to all but one core to leave resources for the main event loop and OS.
+            # Ensure at least one worker.
+            num_workers = max(1, os.cpu_count() - 1)
+
+        print(f"Starting market scan for {len(tickers_to_analyze)} tickers using {num_workers} worker processes...")
 
         for batch_num, batch in enumerate(ticker_batches):
             print(f"  -> Processing batch {batch_num + 1}/{len(ticker_batches)} ({len(batch)} tickers)...")
@@ -203,7 +211,7 @@ class TradingAgent:
                 # Use ProcessPoolExecutor for CPU-bound tasks like HMM training.
                 # This avoids Python's GIL and can fully utilize multiple CPU cores.
                 # We set max_workers to the number of CPU cores for optimal performance.
-                with ProcessPoolExecutor(max_workers=os.cpu_count()) as executor:
+                with ProcessPoolExecutor(max_workers=num_workers) as executor:
                     future_to_ticker = {}
                     for ticker in batch:
                         if ticker in grouped_data.groups:
