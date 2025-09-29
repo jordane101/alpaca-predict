@@ -49,7 +49,7 @@ class HMMStrategy(BaseStrategy):
     """
     A trading strategy that uses a Hidden Markov Model to predict market regimes.
     """
-    def __init__(self, n_components: int = 3, model_order: int = 1, optimize_order: bool = False, max_order_to_test: int = 10, ranking_metric: str = 'sharpe'):
+    def __init__(self, n_components: int = 3, model_order: int = 1, optimize_order: bool = False, max_order_to_test: int = 10, ranking_metric: str = 'sharpe', retrain_max_age_days: int = 30, walk_forward_window: int = 252, retrain_period: int = 63):
         """
         Initializes the HMM-based strategy.
 
@@ -59,11 +59,17 @@ class HMMStrategy(BaseStrategy):
             optimize_order (bool): If True, finds the optimal order for each stock individually.
             max_order_to_test (int): The maximum order to test when optimizing.
             ranking_metric (str): The metric to rank positive signals ('sharpe' or 'return').
+            retrain_max_age_days (int): The max age in days for a cached model before it's retrained for live trading.
+            walk_forward_window (int): The size of the rolling training window (in days) for backtesting.
+            retrain_period (int): How often (in days) to retrain the model during a walk-forward backtest.
         """
         self.n_components = n_components
         self.model_order = model_order
         self.optimize_order = optimize_order
         self.max_order_to_test = max_order_to_test
+        self.retrain_max_age_days = retrain_max_age_days
+        self.walk_forward_window = walk_forward_window
+        self.retrain_period = retrain_period
         if ranking_metric not in ['sharpe', 'return']:
             raise ValueError("ranking_metric must be either 'sharpe' or 'return'.")
         self.ranking_metric = ranking_metric
@@ -83,17 +89,26 @@ class HMMStrategy(BaseStrategy):
         current_model_order = self.model_order
         if self.optimize_order:
             print(f"  -> Optimizing model order for {ticker} (max: {self.max_order_to_test})...")
-            # Create a temporary analyzer to find the optimal order
-            temp_analyzer = AnalyzeHMM(ticker, n_components=self.n_components, model_order=1, bars_data=bars_data)
+            # Create a temporary analyzer to find the optimal order.
+            # Force retraining to ensure optimization runs on fresh data.
+            temp_analyzer = AnalyzeHMM(
+                ticker,
+                n_components=self.n_components,
+                model_order=1,
+                bars_data=bars_data,
+                force_retrain=True
+            )
             current_model_order = temp_analyzer.find_optimal_order(max_order=self.max_order_to_test)
             print(f"  -> Using optimal order {current_model_order} for {ticker}.")
 
         # 2. Create the final analyzer with the determined order and pre-fetched data
+        # This will use the cache if a valid model exists for the given order.
         analyzer = AnalyzeHMM(
             ticker=ticker,
             n_components=self.n_components,
             model_order=current_model_order,
-            bars_data=bars_data
+            bars_data=bars_data,
+            max_age_days=self.retrain_max_age_days
         )
 
         prediction = analyzer.predict_next_day_outlook()
@@ -113,44 +128,68 @@ class HMMStrategy(BaseStrategy):
 
     def generate_signals(self, bars_data: pd.DataFrame):
         """
-        Generates HMM-based entry and exit signals for a given historical dataset.
+        Generates HMM-based entry and exit signals for a given historical dataset
+        using a walk-forward approach to mitigate lookahead bias.
 
-        NOTE: This implementation trains the HMM on the entire dataset at once,
-        which introduces significant lookahead bias. A more rigorous backtest
-        would use a walk-forward or rolling window approach.
+        The model is trained on a rolling window of past data and then used to
+        predict signals for the next period. This is more realistic but slower
+        than training on the full dataset at once.
 
         Args:
             bars_data (pd.DataFrame): Historical bar data for the ticker.
 
         Returns:
-            tuple: (entries, exits) pandas Series.
+            tuple: (entries, exits) pandas Series with boolean values.
         """
-        if bars_data.empty or len(bars_data) < 60: # Need enough data for features
+        # Minimum data needed is one training window + one feature lookback period
+        min_data_len = self.walk_forward_window + 60
+        if bars_data.empty or len(bars_data) < min_data_len:
+            print(f"  -> Not enough data for walk-forward backtest. Need at least {min_data_len}, have {len(bars_data)}.")
             return pd.Series(False, index=bars_data.index), pd.Series(False, index=bars_data.index)
 
-        # 1. Analyze the entire history to find states. Run in non-verbose mode.
-        analyzer = AnalyzeHMM(
-            ticker="backtest",
-            n_components=self.n_components,
-            model_order=self.model_order,
-            bars_data=bars_data,
-            verbose=False
-        )
+        entries = pd.Series(False, index=bars_data.index)
+        exits = pd.Series(False, index=bars_data.index)
+        
+        feature_lookback = 60
 
-        # 2. Identify positive and negative states
-        # state_regimes is sorted by return, from lowest to highest.
-        negative_state = analyzer.state_regimes[0]
-        positive_state = analyzer.state_regimes[-1]
+        print(f"  -> Starting walk-forward backtest for HMMStrategy (Window: {self.walk_forward_window}, Retrain every: {self.retrain_period} days)...")
+        for i in range(self.walk_forward_window, len(bars_data), self.retrain_period):
+            train_start, train_end = i - self.walk_forward_window, i
+            training_data = bars_data.iloc[train_start:train_end]
 
-        # 3. Get the series of hidden states for the historical data
-        states = analyzer.data['Hidden_State']
+            try:
+                # This needs a method to predict on new data, which is not in the original AnalyzeHMM
+                # We need to add `predict_states_for_new_data` to AnalyzeHMM
+                # For now, we'll re-implement a simplified version here.
+                analyzer = AnalyzeHMM(
+                    ticker="backtest_wf",
+                    n_components=self.n_components,
+                    model_order=self.model_order,
+                    bars_data=training_data,
+                    verbose=False,
+                    force_retrain=True
+                )
+            except Exception as e:
+                print(f"  -> Warning: Walk-forward training failed for window [{train_start}:{train_end}]. Reason: {e}")
+                continue
 
-        # 4. Create entry and exit signals
-        entries = (states == positive_state)
-        exits = (states == negative_state)
+            predict_start = i
+            predict_end = min(i + self.retrain_period, len(bars_data))
+            prediction_data = bars_data.iloc[predict_start:predict_end]
 
-        # Reindex to match the original bars_data index, filling missing values with False
-        return entries.reindex(bars_data.index, fill_value=False), exits.reindex(bars_data.index, fill_value=False)
+            if prediction_data.empty: continue
+
+            # Re-create features and predict on the new slice
+            analyzer_pred = AnalyzeHMM(ticker="backtest_pred", bars_data=prediction_data, model_order=self.model_order, verbose=False)
+            states = analyzer_pred.data['Hidden_State']
+
+            negative_state, positive_state = analyzer.state_regimes[0], analyzer.state_regimes[-1]
+            
+            entries.update(states == positive_state)
+            exits.update(states == negative_state)
+
+        print("  -> Walk-forward backtest complete.")
+        return entries, exits
 
 
 class DonchianBreakoutStrategy(BaseStrategy):

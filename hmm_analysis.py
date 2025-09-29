@@ -7,6 +7,9 @@ Date - 07/29/2025
 
 import numpy as np
 import pandas as pd
+import pickle
+import json
+from pathlib import Path
 import logging
 from hmmlearn import hmm
 from dotenv import load_dotenv
@@ -59,7 +62,9 @@ class AnalyzeHMM:
     load_dotenv(".env")
     KEY = os.getenv("PAPER_KEY")
     SECRET = os.getenv("PAPER_SEC")
-    def __init__(self,  ticker:str, timeframe=TimeFrame.Day, n_components=3, model_order=1, bars_data=None, verbose=True):
+    MODEL_DIR = Path("hmm_models")
+
+    def __init__(self,  ticker:str, timeframe=TimeFrame.Day, n_components=3, model_order=1, bars_data=None, verbose=True, force_retrain=False, max_age_days=30):
         self.client = StockHistoricalDataClient(self.KEY,self.SECRET)
         self.timeframe = timeframe
         self.ticker = ticker
@@ -71,6 +76,7 @@ class AnalyzeHMM:
         self.state_means = None
         self.state_stds = None
         self.state_regimes = None
+        self.model_path = self.MODEL_DIR / f"{self.ticker}_{self.n_components}_{self.model_order}.pkl"
 
         if self.model_order < 1:
             raise ValueError("Model order must be 1 or greater.")
@@ -89,7 +95,23 @@ class AnalyzeHMM:
 
         self.features = [] # Will be populated by createFeatures()
         self.data = self.createFeatures()
-        self.train() # Train the model upon initialization
+
+        # --- Model Loading/Training Logic ---
+        # For backtesting, ticker might be 'backtest'. We don't want to cache these.
+        use_cache = not force_retrain and "backtest" not in self.ticker
+
+        if use_cache and self.load_model(max_age_days):
+            # Model loaded successfully. Predict states for the current data.
+            self._predict_states_for_data()
+        else:
+            if self.verbose:
+                if force_retrain:
+                    logging.info(f"Forcing retrain for {ticker}.")
+                elif not use_cache:
+                    logging.info(f"Cache disabled for ticker '{ticker}'. Retraining.")
+
+            # This will train and then save the model.
+            self.train()
 
     def getStockByTicker(self, ticker: str):
         # Calculate a dynamic start date (e.g., 2 years ago) to ensure we get data.
@@ -175,6 +197,133 @@ class AnalyzeHMM:
         sorted_returns = self.state_means['Return'].sort_values()
         self.state_regimes = sorted_returns.index.tolist()
 
+        # Save the newly trained model if it's not a temporary backtest model
+        if "backtest" not in self.ticker:
+            self.save_model()
+
+    def save_model(self):
+        """Saves the trained model and its components to a file."""
+        if not self.model:
+            if self.verbose:
+                logging.warning(f"No model to save for {self.ticker}.")
+            return
+
+        self.MODEL_DIR.mkdir(parents=True, exist_ok=True)
+        trained_at_dt = datetime.now()
+        model_data = {
+            'model': self.model,
+            'quantizer': self.quantizer,
+            'state_means': self.state_means,
+            'state_stds': self.state_stds,
+            'state_regimes': self.state_regimes,
+            'features': self.features,
+            'trained_at': trained_at_dt
+        }
+        try:
+            with open(self.model_path, 'wb') as f:
+                pickle.dump(model_data, f)
+            if self.verbose:
+                logging.info(f"Saved model to {self.model_path}")
+
+            # Also save the human-readable summary
+            self.save_model_summary(trained_at_dt)
+
+        except Exception as e:
+            logging.error(f"Error saving model for {self.ticker} to {self.model_path}: {e}")
+
+    def save_model_summary(self, trained_at_dt):
+        """Saves a human-readable JSON summary of the trained model."""
+        if not self.model:
+            return
+
+        summary_path = self.model_path.with_suffix('.json')
+
+        # Helper to convert non-serializable types like numpy arrays and dataframes
+        def json_converter(o):
+            if isinstance(o, datetime):
+                return o.isoformat()
+            if isinstance(o, (np.ndarray, pd.Series)):
+                return o.tolist()
+            if isinstance(o, pd.DataFrame):
+                # Use to_dict('index') for better readability of state means/stds
+                return o.to_dict(orient='index')
+            if isinstance(o, (np.int64, np.int32)):
+                return int(o)
+            if isinstance(o, (np.float64, np.float32)):
+                return float(o)
+            raise TypeError(f"Object of type {o.__class__.__name__} is not JSON serializable")
+
+        # Create a clear mapping of state number to its regime type
+        regime_map = {}
+        if self.state_regimes:
+            regime_map[self.state_regimes[0]] = 'negative'
+            regime_map[self.state_regimes[-1]] = 'positive'
+            for state in self.state_regimes:
+                if state not in regime_map:
+                    regime_map[state] = 'neutral'
+
+        # Sort by state number for consistent output and ensure keys are strings for JSON
+        sorted_regime_map = {str(k): regime_map[k] for k in sorted(regime_map)}
+
+        summary_data = {
+            'ticker': self.ticker,
+            'n_components': self.n_components,
+            'model_order': self.model_order,
+            'trained_at': trained_at_dt,
+            'features_used': self.features,
+            'state_regime_mapping': sorted_regime_map,
+            'state_means': self.state_means,
+            'state_stds': self.state_stds,
+            'transition_matrix': self.model.transmat_,
+            'start_probabilities': self.model.startprob_
+        }
+
+        try:
+            with open(summary_path, 'w') as f:
+                json.dump(summary_data, f, default=json_converter, indent=4)
+            if self.verbose:
+                logging.info(f"Saved human-readable summary to {summary_path}")
+        except Exception as e:
+            logging.error(f"Error saving model summary for {self.ticker} to {summary_path}: {e}")
+
+    def load_model(self, max_age_days: int):
+        """Loads a pre-trained model if it exists and is not too old."""
+        if not self.model_path.exists():
+            return False
+
+        try:
+            with open(self.model_path, 'rb') as f:
+                model_data = pickle.load(f)
+
+            trained_at = model_data.get('trained_at', datetime.min)
+            if (datetime.now() - trained_at).days > max_age_days:
+                if self.verbose:
+                    logging.info(f"Model for {self.ticker} is older than {max_age_days} days. Will retrain.")
+                return False
+
+            self.model = model_data['model']
+            self.quantizer = model_data['quantizer']
+            self.state_means = model_data['state_means']
+            self.state_stds = model_data['state_stds']
+            self.state_regimes = model_data['state_regimes']
+            self.features = model_data['features']
+            logging.info(f"Loaded cached model for {self.ticker} from {self.model_path}")
+            return True
+        except Exception as e:
+            logging.error(f"Could not load model from {self.model_path}. Deleting corrupt file. Error: {e}")
+            try:
+                os.remove(self.model_path)
+            except OSError as oe:
+                logging.error(f"Could not delete corrupt model file {self.model_path}: {oe}")
+            return False
+
+    def _predict_states_for_data(self):
+        """Predicts hidden states for the current self.data using the loaded model."""
+        X = self.data[self.features].values.copy()
+        X_quantized = self.quantizer.transform(X) # Use transform, not fit_transform
+        hidden_states = self.model.predict(X_quantized)
+        self.data['Hidden_State'] = hidden_states
+
     def find_optimal_order(self, max_order=10):
         """
         Tests different model orders to find the one that best fits unseen data.
@@ -233,15 +382,25 @@ class AnalyzeHMM:
 
         Returns:
             dict: A dictionary containing the prediction details:
-                  - 'outlook': "positive", "negative", or "similar"
+                  - 'outlook': "positive", "negative", or "neutral"
                   - 'last_return': The actual return of the last day.
                   - 'predicted_state_mean_return': The historical average return of the predicted state.
                   - 'predicted_state_std_return': The historical standard deviation of returns of the predicted state.
                   - 'comparison': "higher", "lower", or "the same".
                   - 'predicted_state': The predicted hidden state for the next day.
         """
+        if 'Hidden_State' not in self.data.columns or self.data.empty or pd.isna(self.data['Hidden_State'].iloc[-1]):
+            return {
+                'outlook': 'neutral',
+                'last_return': 0,
+                'predicted_state_mean_return': 0,
+                'predicted_state_std_return': 0,
+                'comparison': 'the same',
+                'predicted_state': -1
+            }
+
         # Get the most recent hidden state
-        last_state = self.data['Hidden_State'].iloc[-1]
+        last_state = int(self.data['Hidden_State'].iloc[-1])
         last_return = self.data['Return'].iloc[-1]
 
         # Use the transition matrix to find the most likely next state
@@ -260,7 +419,7 @@ class AnalyzeHMM:
         elif predicted_next_state == positive_state:
             outlook = "positive"
         else:
-            outlook = "similar"
+            outlook = "neutral"
 
         # Compare returns for a more direct message
         if predicted_state_mean_return > last_return:

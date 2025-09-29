@@ -5,8 +5,9 @@ Author - Eli Jordan
 Date - 07/29/2025
 """
 
+import os
 from datetime import datetime, timedelta
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ProcessPoolExecutor, as_completed
 import requests
 import pandas as pd
 from alpaca.trading.client import TradingClient
@@ -19,6 +20,41 @@ from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
 
 from strategies import BaseStrategy
+
+def _worker_analyze_ticker(strategy: BaseStrategy, sp500_tickers: list, ticker: str, bars_df: pd.DataFrame, is_held: bool):
+    """
+    Worker function for parallel analysis. Runs in a separate process to avoid the GIL.
+    This function is defined at the top level to ensure it can be pickled by ProcessPoolExecutor.
+
+    Args:
+        strategy (BaseStrategy): The strategy instance to use for analysis.
+        sp500_tickers (list): A list of S&P 500 tickers.
+        ticker (str): The stock ticker to analyze.
+        bars_df (pd.DataFrame): A DataFrame of historical bar data for the ticker.
+        is_held (bool): Whether the ticker is currently in the portfolio.
+
+    Returns:
+        tuple: A tuple containing (signal_type, data).
+    """
+    try:
+        outlook, data = strategy.analyze(ticker, bars_df)
+
+        if is_held and outlook == 'negative':
+            print(f"  -> SELL SIGNAL for held position {ticker}.")
+            return 'negative', ticker
+        elif is_held:
+            print(f"  -> HOLD SIGNAL for {ticker} (Outlook: {outlook}).")
+            return 'no_action', ticker
+        elif not is_held and ticker in sp500_tickers and outlook == 'positive':
+            print(f"  -> BUY SIGNAL for {ticker}. Ranking Strength: {data['ranking_strength']:.4f}")
+            return 'positive', data
+        else:
+            # Covers neutral/negative signals for non-held stocks.
+            return 'no_action', ticker
+
+    except Exception as e:
+        print(f"  -> Could not analyze {ticker}. Reason: {e}")
+        return 'error', ticker
 
 class TradingAgent:
     """
@@ -164,19 +200,24 @@ class TradingAgent:
 
                 grouped_data = bars_data.df.groupby('symbol')
 
-                with ThreadPoolExecutor(max_workers=10) as executor:
+                # Use ProcessPoolExecutor for CPU-bound tasks like HMM training.
+                # This avoids Python's GIL and can fully utilize multiple CPU cores.
+                # We set max_workers to the number of CPU cores for optimal performance.
+                with ProcessPoolExecutor(max_workers=os.cpu_count()) as executor:
                     future_to_ticker = {}
                     for ticker in batch:
                         if ticker in grouped_data.groups:
                             ticker_df = grouped_data.get_group(ticker).reset_index(level='symbol', drop=True)
-                            future_to_ticker[executor.submit(self._analyze_single_ticker, ticker, ticker_df, held_tickers)] = ticker
+                            is_held = ticker in held_tickers
+                            future = executor.submit(_worker_analyze_ticker, self.strategy, self.sp500_tickers, ticker, ticker_df, is_held)
+                            future_to_ticker[future] = ticker
 
                     for i, future in enumerate(as_completed(future_to_ticker)):
                         print(f"     Progress on batch: ({i+1}/{len(future_to_ticker)})", end='\r')
                         signal_type, data = future.result()
                         if signal_type == 'positive':
                             positive_predictions.append(data)
-                        elif signal_type == 'negative':
+                        elif signal_type == 'negative' and data in held_tickers:
                             sell_signals.append(data)
                 print(" " * 40, end='\r')
 
@@ -256,35 +297,3 @@ class TradingAgent:
         except Exception as e:
             print(f"Could not fetch S&P 500 tickers: {e}")
             return []
-
-    def _analyze_single_ticker(self, ticker: str, bars_df: pd.DataFrame, held_tickers: set):
-        """
-        Analyzes a single stock using pre-fetched data. Designed to be run in a parallel worker.
-
-        Args:
-            ticker (str): The stock ticker to analyze.
-            bars_df (pd.DataFrame): A DataFrame of historical bar data for the ticker.
-            held_tickers (set): A set of tickers for currently held positions.
-
-        Returns:
-            tuple: A tuple containing (signal_type, data).
-        """
-        try:
-            outlook, data = self.strategy.analyze(ticker, bars_df)
-            is_held = ticker in held_tickers
-
-            if is_held and outlook == 'negative':
-                print(f"  -> SELL SIGNAL for held position {ticker}.")
-                return 'negative', ticker
-            elif is_held:
-                print(f"  -> HOLD SIGNAL for {ticker} (Outlook: {outlook}).")
-                return 'no_action', ticker
-            elif not is_held and ticker in self.sp500_tickers and outlook == 'positive':
-                print(f"  -> BUY SIGNAL for {ticker}. Ranking Strength: {data['ranking_strength']:.4f}")
-                return 'positive', data
-            else:
-                return 'no_action', ticker
-
-        except Exception as e:
-            print(f"  -> Could not analyze {ticker}. Reason: {e}")
-            return None, None
