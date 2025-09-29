@@ -7,18 +7,52 @@ Date - 07/29/2025
 
 import numpy as np
 import pandas as pd
+import logging
 from hmmlearn import hmm
 from dotenv import load_dotenv
-import os
 import matplotlib.pyplot as plt
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
+from alpaca.data.enums import DataFeed
 
 from sklearn.preprocessing import QuantileTransformer
 from sklearn.model_selection import train_test_split
 
 from datetime import datetime, timedelta
+import os
+
+def setup_logging():
+    """Sets up logging to file and console for standalone script execution."""
+    log_dir = "logs"
+    os.makedirs(log_dir, exist_ok=True)
+
+    # Generate a filename based on the current date and time (AM/PM)
+    now = datetime.now()
+    # Format: hmm_training_YYYY-MM-DD_AM.log or hmm_training_YYYY-MM-DD_PM.log
+    log_filename = "hmm_training_" + now.strftime("%Y-%m-%d_%p") + ".log"
+    log_file = os.path.join(log_dir, log_filename)
+
+    # Get the root logger.
+    logger = logging.getLogger()
+    logger.setLevel(logging.INFO)
+
+    # Clear existing handlers to avoid duplicates if run multiple times.
+    if logger.hasHandlers():
+        logger.handlers.clear()
+
+    # File handler for logging to a file.
+    file_handler = logging.FileHandler(log_file, mode='a') # Append mode
+    file_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+    logger.addHandler(file_handler)
+
+    # Console handler for printing to the console.
+    console_handler = logging.StreamHandler()
+    console_handler.setFormatter(logging.Formatter('%(message)s')) # Cleaner console output
+    logger.addHandler(console_handler)
+
+    logging.info(f"--- New Training Run at {now.strftime('%Y-%m-%d %H:%M:%S')} ---")
+    logging.info(f"Logging for this run will be appended to: {log_file}")
 
 
 class AnalyzeHMM:
@@ -64,7 +98,7 @@ class AnalyzeHMM:
             symbol_or_symbols=[ticker],
             timeframe=self.timeframe,
             start=start_date,
-            feed='iex'  # Explicitly specify the free IEX data feed
+            feed=DataFeed.IEX  # Explicitly specify the free IEX data feed
         )
 
         self.bars = self.client.get_stock_bars(request_params)
@@ -131,10 +165,10 @@ class AnalyzeHMM:
         self.state_stds = self.data.groupby('Hidden_State')[self.features].std()
 
         if self.verbose:
-            print("State Characteristics (Means):")
-            print(self.state_means)
-            print("\nState Characteristics (Standard Deviations):")
-            print(self.state_stds)
+            logging.info("State Characteristics (Means):")
+            logging.info("\n" + self.state_means.to_string())
+            logging.info("\nState Characteristics (Standard Deviations):")
+            logging.info("\n" + self.state_stds.to_string())
 
         # Identify state regimes based on returns. The index of this series
         # is the state number, sorted from lowest return to highest.
@@ -152,7 +186,7 @@ class AnalyzeHMM:
             int: The model order with the highest log-likelihood score on the test set.
         """
         if self.verbose:
-            print(f"\n--- Finding Optimal Model Order (1 to {max_order}) ---")
+            logging.info(f"\n--- Finding Optimal Model Order (1 to {max_order}) ---")
         # We can't split before creating features, as features rely on rolling windows.
         # So we create features on the full dataset first.
         full_data_with_features = self.createFeatures()
@@ -183,14 +217,14 @@ class AnalyzeHMM:
                 score = model.score(test_X)
                 scores.append(score)
                 if self.verbose:
-                    print(f"  Order {order}: Score = {score:.2f}")
+                    logging.info(f"  Order {order}: Score = {score:.2f}")
             except Exception as e:
-                print(f"  Order {order}: Failed. Reason: {e}")
+                logging.error(f"  Order {order}: Failed. Reason: {e}")
                 scores.append(float('-inf')) # Use negative infinity for failed models
 
         best_order = np.argmax(scores) + 1
         if self.verbose:
-            print(f"--- Optimal model order found: {best_order} ---")
+            logging.info(f"--- Optimal model order found: {best_order} ---")
         return best_order
 
     def predict_next_day_outlook(self):
@@ -246,33 +280,36 @@ class AnalyzeHMM:
         }
 
 if __name__ == "__main__":
+    # When run as a script, set up file and console logging.
+    setup_logging()
+
     TICKER_TO_ANALYZE = "RBLX"  # Define the ticker once
     N_COMPONENTS = 3
     MAX_ORDER_TO_TEST = 10
 
     start_time = datetime.now()
 
-    # Create a temporary analyzer instance to find the optimal order for our target stock.
+    # Create an analyzer instance to find the optimal order for our target stock.
     # A base model_order=1 is sufficient here as find_optimal_order handles feature creation internally.
     temp_analyzer = AnalyzeHMM(TICKER_TO_ANALYZE, n_components=N_COMPONENTS, model_order=5)
     optimal_order = temp_analyzer.find_optimal_order(max_order=MAX_ORDER_TO_TEST)
 
     # Now, create the final analyzer with the determined optimal order
-    print(f"\n--- Analyzing {TICKER_TO_ANALYZE} with optimal order: {optimal_order} ---")
+    logging.info(f"\n--- Analyzing {TICKER_TO_ANALYZE} with optimal order: {optimal_order} ---")
     ah = AnalyzeHMM(TICKER_TO_ANALYZE, n_components=N_COMPONENTS, model_order=optimal_order)
     end_time = datetime.now()
     stopwatch = end_time - start_time
     last_state = ah.data['Hidden_State'].iloc[-1]
     last_return = ah.data['Return'].iloc[-1]
 
-    print(f"Time to run: {stopwatch}")
-    print(f"\nToday's Hidden State: {last_state}")
-    print(f"Today's Return: {last_return:.4f}")
+    logging.info(f"Time to run: {stopwatch}")
+    logging.info(f"\nToday's Hidden State: {last_state}")
+    logging.info(f"Today's Return: {last_return:.4f}")
 
     prediction = ah.predict_next_day_outlook()
 
-    print(f"\nPredicted Next State: {prediction['predicted_state']} (Regime Outlook: {prediction['outlook'].upper()})")
-    print(f"Tomorrow's return is predicted to be {prediction['comparison']} than today's.")
-    print(f" -> Today's Actual Return: {prediction['last_return']:.4f}")
-    print(f" -> Predicted State's Avg. Return: {prediction['predicted_state_mean_return']:.4f}")
-    print(f" -> Predicted State's Return Std. Dev.: {prediction['predicted_state_std_return']:.4f}")
+    logging.info(f"\nPredicted Next State: {prediction['predicted_state']} (Regime Outlook: {prediction['outlook'].upper()})")
+    logging.info(f"Tomorrow's return is predicted to be {prediction['comparison']} than today's.")
+    logging.info(f" -> Today's Actual Return: {prediction['last_return']:.4f}")
+    logging.info(f" -> Predicted State's Avg. Return: {prediction['predicted_state_mean_return']:.4f}")
+    logging.info(f" -> Predicted State's Return Std. Dev.: {prediction['predicted_state_std_return']:.4f}")

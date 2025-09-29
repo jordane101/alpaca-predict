@@ -1,0 +1,290 @@
+"""
+Defines the TradingAgent, a class responsible for executing a trading strategy.
+
+Author - Eli Jordan
+Date - 07/29/2025
+"""
+
+from datetime import datetime, timedelta
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import requests
+import pandas as pd
+from alpaca.trading.client import TradingClient
+from alpaca.trading.requests import MarketOrderRequest, ClosePositionRequest
+from alpaca.trading.enums import OrderSide, TimeInForce, AssetClass
+from alpaca.common.exceptions import APIError
+from alpaca.data.enums import DataFeed
+from alpaca.data.historical import StockHistoricalDataClient
+from alpaca.data.requests import StockBarsRequest
+from alpaca.data.timeframe import TimeFrame
+
+from strategies import BaseStrategy
+
+class TradingAgent:
+    """
+    A trading agent that scans S&P 500 stocks using a configurable strategy,
+    identifies the top opportunities, and executes trades based on a
+    defined capital allocation.
+    """
+
+    def __init__(self, name: str, strategy: BaseStrategy, trading_client: TradingClient, data_client: StockHistoricalDataClient, max_positions: int = 10, total_allocation_pct: float = 0.5, waterfall_allocation_pcts: list = None, stop_loss_pct: float = None, take_profit_pct: float = None):
+        """
+        Initializes the agent and the Alpaca trading client.
+
+        Args:
+            name (str): A unique name for this agent instance.
+            strategy (BaseStrategy): The trading strategy to use for analysis.
+            trading_client (TradingClient): An authenticated Alpaca trading client.
+            data_client (StockHistoricalDataClient): An authenticated Alpaca data client.
+            max_positions (int): The maximum number of positions to hold at any time.
+            total_allocation_pct (float): The percentage of total equity to allocate to this strategy (e.g., 0.5 for 50%).
+            waterfall_allocation_pcts (list[float]): A list of percentages for waterfall allocation for new buys.
+                                                     The list length determines the max number of new buys per run.
+                                                     If None, a default descending weight allocation is created.
+                                                     The list should sum to 1.0.
+            stop_loss_pct (float, optional): The percentage loss at which to trigger a stop-loss sell (e.g., 0.05 for 5%). Defaults to None.
+            take_profit_pct (float, optional): The percentage gain at which to trigger a take-profit sell (e.g., 0.10 for 10%). Defaults to None.
+        """
+        self.name = name
+        self.trading_client = trading_client
+        self.data_client = data_client
+        self.strategy = strategy
+        self.max_positions = max_positions
+        self.total_allocation_pct = total_allocation_pct
+        self.stop_loss_pct = stop_loss_pct
+        self.take_profit_pct = take_profit_pct
+        self.waterfall_allocation_pcts = waterfall_allocation_pcts
+        self.sp500_tickers = self._get_sp500_tickers()
+
+        if not (0 < self.total_allocation_pct <= 1.0):
+            raise ValueError("total_allocation_pct must be between 0 and 1.0.")
+
+        if self.waterfall_allocation_pcts is None:
+            weights = list(range(self.max_positions, 0, -1))
+            total_weight = sum(weights)
+            self.waterfall_allocation_pcts = [w / total_weight for w in weights]
+            print(f"Using default waterfall allocation for up to {self.max_positions} positions.")
+
+        if abs(sum(self.waterfall_allocation_pcts) - 1.0) > 1e-9:
+            raise ValueError("waterfall_allocation_pcts must sum to 1.0.")
+
+    def generate_trade_decisions(self, account, all_positions, owned_tickers):
+        """
+        Analyzes the market and generates a list of buy and sell decisions.
+        This method does not execute any trades.
+
+        Args:
+            account: The Alpaca account object.
+            all_positions (list): A list of all positions in the account.
+            owned_tickers (set): A set of tickers this agent currently owns.
+
+        Returns:
+            dict: A dictionary containing 'buys' and 'sells' lists.
+                  - 'sells': A list of tickers to sell.
+                  - 'buys': A list of dictionaries, each representing a stock to buy,
+                            including 'ticker' and 'notional_value'.
+        """
+        print(f"Agent '{self.name}' owns {len(owned_tickers)} tickers: {list(owned_tickers)}")
+
+        # 1. Identify sell signals for positions owned by this agent
+        owned_positions = [p for p in all_positions if p.symbol in owned_tickers]
+        risk_management_sells = self._check_risk_management_triggers(owned_positions)
+        
+        # 2. Scan market for buy signals and strategy-based sell signals
+        positive_signals, strategy_sells = self._scan_and_analyze_market(owned_tickers)
+
+        # Combine all sell signals for tickers this agent owns
+        all_sells_to_make = set(risk_management_sells) | set(strategy_sells)
+        
+        # 3. Determine buy decisions based on positive signals and capital
+        buy_decisions = self._decide_buys(positive_signals, account, all_positions, owned_tickers)
+
+        return {
+            'sells': list(all_sells_to_make),
+            'buys': buy_decisions
+        }
+
+    def _check_risk_management_triggers(self, positions):
+        """Checks all positions for stop-loss or take-profit conditions."""
+        stop_loss_sells = []
+        take_profit_sells = []
+        if not (self.stop_loss_pct or self.take_profit_pct) or not positions:
+            return []
+
+        print("Checking for stop-loss and take-profit triggers...")
+        for p in positions:
+            if p.asset_class != AssetClass.US_EQUITY:
+                continue
+
+            unrealized_plpc = float(p.unrealized_plpc)
+
+            if self.stop_loss_pct is not None and unrealized_plpc <= -self.stop_loss_pct:
+                print(f"  -> STOP-LOSS triggered for {p.symbol} (Loss: {unrealized_plpc:.2%}).")
+                stop_loss_sells.append(p.symbol)
+                continue
+
+            if self.take_profit_pct is not None and unrealized_plpc >= self.take_profit_pct:
+                print(f"  -> TAKE-PROFIT triggered for {p.symbol} (Gain: {unrealized_plpc:.2%}).")
+                take_profit_sells.append(p.symbol)
+
+        print(f"Triggered {len(stop_loss_sells)} stop-loss and {len(take_profit_sells)} take-profit sells.")
+        return stop_loss_sells + take_profit_sells
+
+    def _scan_and_analyze_market(self, held_tickers):
+        """Scans, fetches data, and analyzes tickers to generate trade signals."""
+        tickers_to_analyze = sorted(list(set(self.sp500_tickers) | held_tickers))
+        if not tickers_to_analyze:
+            print("No tickers to analyze.")
+            return [], []
+
+        positive_predictions = []
+        sell_signals = []
+        BATCH_SIZE = 100
+        ticker_batches = [tickers_to_analyze[i:i + BATCH_SIZE] for i in range(0, len(tickers_to_analyze), BATCH_SIZE)]
+
+        print(f"Starting market scan for {len(tickers_to_analyze)} tickers...")
+
+        for batch_num, batch in enumerate(ticker_batches):
+            print(f"  -> Processing batch {batch_num + 1}/{len(ticker_batches)} ({len(batch)} tickers)...")
+            try:
+                end_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
+                start_date = (datetime.now() - timedelta(days=365 * 2)).strftime('%Y-%m-%d')
+                request_params = StockBarsRequest(
+                    symbol_or_symbols=batch,
+                    timeframe=TimeFrame.Day,
+                    start=start_date,
+                    end=end_date,
+                    feed=DataFeed.IEX
+                )
+                bars_data = self.data_client.get_stock_bars(request_params)
+
+                if bars_data.df.empty:
+                    print(f"    -> API returned no data for batch {batch_num + 1}.")
+                    continue
+
+                grouped_data = bars_data.df.groupby('symbol')
+
+                with ThreadPoolExecutor(max_workers=10) as executor:
+                    future_to_ticker = {}
+                    for ticker in batch:
+                        if ticker in grouped_data.groups:
+                            ticker_df = grouped_data.get_group(ticker).reset_index(level='symbol', drop=True)
+                            future_to_ticker[executor.submit(self._analyze_single_ticker, ticker, ticker_df, held_tickers)] = ticker
+
+                    for i, future in enumerate(as_completed(future_to_ticker)):
+                        print(f"     Progress on batch: ({i+1}/{len(future_to_ticker)})", end='\r')
+                        signal_type, data = future.result()
+                        if signal_type == 'positive':
+                            positive_predictions.append(data)
+                        elif signal_type == 'negative':
+                            sell_signals.append(data)
+                print(" " * 40, end='\r')
+
+            except APIError as e:
+                print(f"    -> API Error on batch {batch_num + 1}: {e}. Skipping batch.")
+            except Exception as e:
+                print(f"    -> Unexpected error on batch {batch_num + 1}: {e}. Skipping batch.")
+        
+        print("Market scan complete.")
+        print(f"Found {len(positive_predictions)} stocks with a positive outlook.")
+        print(f"Found {len(sell_signals)} stocks with a negative outlook (strategy sell signals).")
+        return positive_predictions, sell_signals
+
+    def _decide_buys(self, positive_predictions, account, all_positions, owned_tickers):
+        """Prioritizes buy signals and calculates notional values for each."""
+        buy_decisions = []
+        if not positive_predictions:
+            print("No positive signals found, no new buy decisions.")
+            return buy_decisions
+
+        sorted_predictions = sorted(positive_predictions, key=lambda x: x['ranking_strength'], reverse=True)
+
+        total_equity = float(account.equity)
+        target_portfolio_value = total_equity * self.total_allocation_pct
+
+        # Calculate value of positions owned *by this agent*
+        agent_positions_value = sum(float(p.market_value) for p in all_positions if p.symbol in owned_tickers)
+
+        cash_for_new_buys = target_portfolio_value - agent_positions_value
+        num_held_positions = len(owned_tickers)
+        slots_to_fill = self.max_positions - num_held_positions
+
+        print(f"Agent Target Allocation ({self.total_allocation_pct:.0%}): ${target_portfolio_value:,.2f}")
+        print(f"Agent Current Position Value: ${agent_positions_value:,.2f}")
+        print(f"Cash available for new buys: ${cash_for_new_buys:,.2f}")
+
+        if cash_for_new_buys <= 1 or slots_to_fill <= 0:
+            print(f"Agent portfolio is full or fully allocated. No new buy decisions.")
+            return buy_decisions
+
+        print(f"Agent has {num_held_positions}/{self.max_positions} positions. Looking to fill up to {slots_to_fill} slot(s).")
+        # Filter out stocks already owned by this agent
+        available_for_buy = [p for p in sorted_predictions if p['ticker'] not in owned_tickers]
+        num_buys_to_make = min(len(available_for_buy), slots_to_fill, len(self.waterfall_allocation_pcts))
+        top_picks = available_for_buy[:num_buys_to_make]
+
+        if not top_picks:
+            print("Top picks are already held by this agent or no new signals. No new buy decisions.")
+            return buy_decisions
+
+        print(f"Top {len(top_picks)} picks for buying:")
+        for i, pick in enumerate(top_picks):
+            allocation_pct = self.waterfall_allocation_pcts[i]
+            notional_value = cash_for_new_buys * allocation_pct
+            pick['notional_value'] = round(notional_value, 2)
+            print(f"  - {pick['ticker']}: Strength={pick['ranking_strength']:.4f}, Notional=${pick['notional_value']:.2f}")
+            if pick['notional_value'] >= 1:
+                buy_decisions.append(pick)
+
+        return buy_decisions
+
+    def _get_sp500_tickers(self):
+        """Fetches the list of S&P 500 tickers from Wikipedia."""
+        print("Fetching S&P 500 tickers...")
+        try:
+            url = 'https://en.wikipedia.org/wiki/List_of_S%26P_500_companies'
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36'
+            }
+            response = requests.get(url, headers=headers)
+            response.raise_for_status()
+            table = pd.read_html(response.text)
+            df = table[0]
+            tickers = df['Symbol'].tolist()
+            print(f"Found {len(tickers)} tickers.")
+            return tickers
+        except Exception as e:
+            print(f"Could not fetch S&P 500 tickers: {e}")
+            return []
+
+    def _analyze_single_ticker(self, ticker: str, bars_df: pd.DataFrame, held_tickers: set):
+        """
+        Analyzes a single stock using pre-fetched data. Designed to be run in a parallel worker.
+
+        Args:
+            ticker (str): The stock ticker to analyze.
+            bars_df (pd.DataFrame): A DataFrame of historical bar data for the ticker.
+            held_tickers (set): A set of tickers for currently held positions.
+
+        Returns:
+            tuple: A tuple containing (signal_type, data).
+        """
+        try:
+            outlook, data = self.strategy.analyze(ticker, bars_df)
+            is_held = ticker in held_tickers
+
+            if is_held and outlook == 'negative':
+                print(f"  -> SELL SIGNAL for held position {ticker}.")
+                return 'negative', ticker
+            elif is_held:
+                print(f"  -> HOLD SIGNAL for {ticker} (Outlook: {outlook}).")
+                return 'no_action', ticker
+            elif not is_held and ticker in self.sp500_tickers and outlook == 'positive':
+                print(f"  -> BUY SIGNAL for {ticker}. Ranking Strength: {data['ranking_strength']:.4f}")
+                return 'positive', data
+            else:
+                return 'no_action', ticker
+
+        except Exception as e:
+            print(f"  -> Could not analyze {ticker}. Reason: {e}")
+            return None, None

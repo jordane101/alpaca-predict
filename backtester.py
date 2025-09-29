@@ -11,6 +11,7 @@ from dotenv import load_dotenv
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.data.requests import StockBarsRequest
 from alpaca.data.timeframe import TimeFrame
+from alpaca.data.enums import DataFeed
 
 from strategies import BaseStrategy
 
@@ -51,7 +52,8 @@ class Backtester:
             symbol_or_symbols=[self.ticker], # API requires a list
             timeframe=self.timeframe,
             start=self.start_date,
-            end=self.end_date
+            end=self.end_date,
+            feed=DataFeed.IEX
         )
         bars = self.data_client.get_stock_bars(request_params)
 

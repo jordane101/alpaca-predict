@@ -211,7 +211,8 @@ class DonchianBreakoutStrategy(BaseStrategy):
         prediction_data = {
             'ticker': ticker,
             'last_return': bars_data['close'].pct_change().iloc[-1],
-            'predicted_state_mean_return': strength
+            'predicted_state_mean_return': strength,
+            'predicted_state_std_return': 0.0 # Add for consistent data structure
         }
 
         return outlook, prediction_data
