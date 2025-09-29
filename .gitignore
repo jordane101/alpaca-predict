@@ -167,3 +167,4 @@ reports
 *.html
 outputs
 hmm_models
+position_ownership.json
