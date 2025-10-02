@@ -67,38 +67,53 @@ def calculate_monthly_pnl():
     print(f"\nCalculating P/L for the period: {start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}")
 
     # --- Fetching Activities (Direct API Call) ---
-    # We use the requests library to make a direct API call to the activities endpoint.
-    # This is the most reliable way to get the P/L data calculated by Alpaca,
-    # which correctly accounts for shares held from previous periods.
-    print("\nFetching activities via direct API call...")
-    # Per user feedback, use the specific /FILL endpoint for the initial fetch.
+    # We fetch all activities for the month, handling pagination to ensure all
+    # records are retrieved. The Alpaca API uses cursor-based pagination where
+    # the 'id' of the last item is used as the 'page_token' for the next request.
+    print("\nFetching all trade activities (fills) for the period...")
     monthly_activities_url = "https://paper-api.alpaca.markets/v2/account/activities/FILL"
     headers = {
         "APCA-API-KEY-ID": KEY,
         "APCA-API-SECRET-KEY": SECRET,
         "accept": "application/json"
     }
-    monthly_params = {
-        # activity_types is redundant when using the /FILL endpoint.
-        "after": start_date.isoformat() + "Z",
-        "until": end_date.isoformat() + "Z"
-    }
 
-    try:
-        # Use the specific URL and params for the monthly fetch.
-        response = requests.get(monthly_activities_url, headers=headers, params=monthly_params)
-        response.raise_for_status()  # Raise an exception for bad status codes (4xx or 5xx)
-        activities_data = response.json()
+    all_activities = []
+    page_token = None
+    page_size = 100  # Max page size is 100
 
-        if not activities_data:
-            print("No trade activities (fills) found for the specified period.")
+    while True:
+        params = {
+            "after": start_date.isoformat() + "Z",
+            "until": end_date.isoformat() + "Z",
+            "page_size": page_size,
+            "direction": "asc"  # Process chronologically
+        }
+        if page_token:
+            params["page_token"] = page_token
+
+        try:
+            response = requests.get(monthly_activities_url, headers=headers, params=params)
+            response.raise_for_status()
+            current_page_activities = response.json()
+
+            if not current_page_activities:
+                break  # No more pages
+
+            all_activities.extend(current_page_activities)
+            page_token = current_page_activities[-1]['id']
+
+        except requests.exceptions.RequestException as e:
+            print(f"Error fetching activities from Alpaca API: {e}")
             return
 
-        print(f"Found {len(activities_data)} trade activities (fills).")
+    activities_data = all_activities
 
-    except requests.exceptions.RequestException as e:
-        print(f"Error fetching activities from Alpaca API: {e}")
+    if not activities_data:
+        print("No trade activities (fills) found for the specified period.")
         return
+
+    print(f"Found {len(activities_data)} trade activities (fills) after handling pagination.")
 
     # --- Net Flow P/L Calculation by Asset Class and Asset ---
     pnl_by_class_and_asset = {}
@@ -202,9 +217,12 @@ def calculate_monthly_pnl():
         # Convert the dictionary to a list of records for DataFrame creation
         summary_list = []
         for symbol, data in pnl_by_asset.items():
-            record = {'Symbol': symbol, 'Asset Class': asset_class}
-            record.update(data)
-            summary_list.append(record)
+            # Only include assets where the quantity bought and sold within the month is equal.
+            # This ensures the "Net Flow" P/L is only calculated for complete round trips within the period.
+            if data['Qty Bought'] > 0 and data['Qty Bought'] == data['Qty Sold']:
+                record = {'Symbol': symbol, 'Asset Class': asset_class}
+                record.update(data)
+                summary_list.append(record)
 
         all_summaries_list.extend(summary_list)
 
@@ -272,7 +290,7 @@ def calculate_monthly_pnl():
         # Format filename with month and P/L
         report_month_str = start_date.strftime('%Y-%m')
         pnl_for_filename = int(overall_total_pnl)
-        filename = f"pnl_report_{report_month_str}_PL_{pnl_for_filename}.csv"
+        filename = f"pnl_report_{report_month_str}_PL.csv"
         filepath = os.path.join(report_dir, filename)
 
         try:

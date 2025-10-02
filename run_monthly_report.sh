@@ -14,7 +14,7 @@ cd "$PROJECT_DIR" || { echo "Failed to cd to $PROJECT_DIR" >&2; exit 1; }
 # If your project uses a virtual environment (e.g., named 'venv'),
 # uncomment the following line to activate it before running the script.
 #
-# source "$PROJECT_DIR/venv/bin/activate"
+source "$PROJECT_DIR/.venv/bin/activate"
 
 # Define the log file path. A new log is created for each run, named by date.
 LOG_FILE="$PROJECT_DIR/reports/pnl_report_$(date +\%Y-\%m-\%d).log"
