@@ -25,7 +25,7 @@ if __name__ == "__main__":
                 optimize_order=False, # Set to True to find best model order per stock (slower)
                 max_order_to_test=5,
                 ranking_metric='sharpe', # 'sharpe' or 'return'
-                retrain_max_age_days=30, # Retrain models if they are older than 30 days
+                retrain_max_age_days=1,  # Retrain models every morning.
                 walk_forward_window=252, # ~1 year of training data for backtests
                 retrain_period=63        # ~1 quarter before retraining in backtests
             ),
@@ -33,8 +33,10 @@ if __name__ == "__main__":
             "total_allocation_pct": 0.50, # Use 50% of total equity for this agent
             # NOTE: HMMStrategy now uses dynamic stop-loss and take-profit targets.
             # These static values are used as fallbacks by the orchestrator.
+            # The orchestrator also uses these to define a re-entry "middle ground".
             "stop_loss_pct": 0.05,
-            "take_profit_pct": 0.10,
+            # Take-profit is set to 2x the stop-loss for a 2:1 risk/reward ratio.
+            "take_profit_pct": 0.10, # 2 * stop_loss_pct
             "max_analysis_workers": 4,    # Limit CPU usage for analysis. Default is os.cpu_count() - 1.
         }
         # ,{

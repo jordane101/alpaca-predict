@@ -1,152 +1,272 @@
 {
-    "STT": {
-        "owner": "HMM_Momentum_Agent",
-        "stop_loss_price": 116.12431933614522,
-        "take_profit_price": 117.7472193387425
-    },
-    "HWM": {
-        "owner": "HMM_Momentum_Agent",
-        "stop_loss_price": 189.33002865903208,
-        "take_profit_price": 193.09732987190168
-    },
-    "TRMB": {
-        "owner": "HMM_Momentum_Agent",
-        "stop_loss_price": 81.00988597007945,
-        "take_profit_price": 82.41898002486042
-    },
-    "APH": {
-        "owner": "HMM_Momentum_Agent",
-        "stop_loss_price": 118.18185618434022,
-        "take_profit_price": 122.06992820295909
-    },
-    "ORCL": {
-        "owner": "HMM_Momentum_Agent",
-        "stop_loss_price": 279.3481888670542,
-        "take_profit_price": 283.9922543339553
-    },
-    "AEE": {
-        "owner": "HMM_Momentum_Agent",
-        "stop_loss_price": 102.38142711473446,
-        "take_profit_price": 103.97245471650817
-    },
-    "EQT": {
-        "owner": "HMM_Momentum_Agent",
-        "stop_loss_price": 53.58118449739414,
-        "take_profit_price": 54.7933949234131
-    },
-    "EXC": {
-        "owner": "HMM_Momentum_Agent",
-        "stop_loss_price": 43.69596496936618,
-        "take_profit_price": 44.43271652159
-    },
-    "EBAY": {
-        "owner": "HMM_Momentum_Agent",
-        "stop_loss_price": 89.87906681998645,
-        "take_profit_price": 91.52756524188047
-    },
-    "PANW": {
-        "owner": "HMM_Momentum_Agent",
-        "stop_loss_price": 199.441284563125,
-        "take_profit_price": 205.2661274016835
-    },
-    "LNT": {
-        "owner": "HMM_Momentum_Agent",
-        "stop_loss_price": 66.03486880026327,
-        "take_profit_price": 66.98719006759482
-    },
-    "TECH": {
-        "owner": "HMM_Momentum_Agent",
-        "stop_loss_price": 51.13735864791176,
-        "take_profit_price": 52.526377387598835
-    },
-    "GRMN": {
-        "owner": "HMM_Momentum_Agent",
-        "stop_loss_price": 243.34786280221664,
-        "take_profit_price": 246.14893958502273
-    },
-    "ALB": {
-        "owner": "HMM_Momentum_Agent",
-        "stop_loss_price": 83.49684509201724,
-        "take_profit_price": 87.81781224638881
-    },
-    "TTWO": {
-        "owner": "HMM_Momentum_Agent",
-        "stop_loss_price": 257.55435972052805,
-        "take_profit_price": 260.71176010809285
-    },
-    "EG": {
-        "owner": "HMM_Momentum_Agent",
-        "stop_loss_price": 341.20301337839567,
-        "take_profit_price": 347.24026124801225
-    },
-    "TMUS": {
-        "owner": "HMM_Momentum_Agent",
-        "stop_loss_price": 235.06657685726037,
-        "take_profit_price": 238.68878058773961
-    },
-    "AFL": {
-        "owner": "HMM_Momentum_Agent",
-        "stop_loss_price": 110.32264684028834,
-        "take_profit_price": 111.5900613776868
-    },
-    "MTB": {
-        "owner": "HMM_Momentum_Agent",
-        "stop_loss_price": 195.45674612243482,
-        "take_profit_price": 198.93462246131963
-    },
-    "BLDR": {
-        "owner": "HMM_Momentum_Agent",
-        "stop_loss_price": 114.81050713627975,
-        "take_profit_price": 120.68655505915962
-    },
-    "AMT": {
-        "owner": "HMM_Momentum_Agent",
-        "stop_loss_price": 191.02542733510995,
-        "take_profit_price": 195.32070226539744
-    },
-    "DECK": {
-        "owner": "HMM_Momentum_Agent",
-        "stop_loss_price": 99.42927084000196,
-        "take_profit_price": 104.09956036046405
-    },
-    "ECL": {
-        "owner": "HMM_Momentum_Agent",
-        "stop_loss_price": 270.5325280986053,
-        "take_profit_price": 273.32134429025047
-    },
     "ATO": {
-        "owner": "HMM_Momentum_Agent",
-        "stop_loss_price": 168.10566573815788,
-        "take_profit_price": 169.85675846979112
-    },
-    "DELL": {
-        "owner": "HMM_Momentum_Agent",
-        "stop_loss_price": 131.01138683059247,
-        "take_profit_price": 134.4713843950954
+        "symbol": "ATO",
+        "agent_name": "HMM_Momentum_Agent",
+        "entry_price": 169.39,
+        "quantity": 3.0897927858787417,
+        "stop_loss_price": 167.92722014145522,
+        "take_profit_price": 169.6764540732318,
+        "state": "OPEN",
+        "cooldown_reason": null
     },
     "PLD": {
-        "owner": "HMM_Momentum_Agent",
-        "stop_loss_price": 112.63049144901512,
-        "take_profit_price": 114.56306755082853
+        "symbol": "PLD",
+        "agent_name": "HMM_Momentum_Agent",
+        "entry_price": 116.48,
+        "quantity": 2.9955357142857144,
+        "stop_loss_price": 114.82888091012063,
+        "take_profit_price": 116.79917819098914,
+        "state": "PENDING_SELL",
+        "cooldown_reason": "TAKE_PROFIT"
     },
-    "KKR": {
-        "owner": "HMM_Momentum_Agent",
-        "stop_loss_price": 132.24154929004126,
-        "take_profit_price": 134.88387734410955
+    "TRMB": {
+        "symbol": "TRMB",
+        "agent_name": "HMM_Momentum_Agent",
+        "entry_price": 79.415,
+        "quantity": 31.31461310835484,
+        "stop_loss_price": 78.5512769180461,
+        "take_profit_price": 81.1424461639078,
+        "state": "OPEN",
+        "cooldown_reason": null
     },
-    "ESS": {
-        "owner": "HMM_Momentum_Agent",
-        "stop_loss_price": 262.70006491751553,
-        "take_profit_price": 266.8904462190198
+    "HWM": {
+        "symbol": "HWM",
+        "agent_name": "HMM_Momentum_Agent",
+        "entry_price": 194.8,
+        "quantity": 12.340657084188912,
+        "stop_loss_price": 192.5746483172511,
+        "take_profit_price": 199.25070336549783,
+        "state": "OPEN",
+        "cooldown_reason": null
     },
-    "HAS": {
-        "owner": "HMM_Momentum_Agent",
-        "stop_loss_price": 75.69885060423675,
-        "take_profit_price": 77.18189147328951
+    "GLW": {
+        "symbol": "GLW",
+        "agent_name": "HMM_Momentum_Agent",
+        "entry_price": 83.11,
+        "quantity": 27.927565876549153,
+        "stop_loss_price": 82.23436336571591,
+        "take_profit_price": 84.86127326856818,
+        "state": "OPEN",
+        "cooldown_reason": null
     },
-    "DAY": {
-        "owner": "HMM_Momentum_Agent",
-        "stop_loss_price": 65.8862378800489,
-        "take_profit_price": 69.36465340259387
+    "BMY": {
+        "symbol": "BMY",
+        "agent_name": "HMM_Momentum_Agent",
+        "entry_price": 47.41,
+        "quantity": 47.20881670533643,
+        "stop_loss_price": 46.84508039187668,
+        "take_profit_price": 48.53983921624663,
+        "state": "OPEN",
+        "cooldown_reason": null
+    },
+    "AEE": {
+        "symbol": "AEE",
+        "agent_name": "HMM_Momentum_Agent",
+        "entry_price": 103.4,
+        "quantity": 20.84400386847195,
+        "stop_loss_price": 102.23193458340313,
+        "take_profit_price": 105.73613083319377,
+        "state": "OPEN",
+        "cooldown_reason": null
+    },
+    "EQT": {
+        "symbol": "EQT",
+        "agent_name": "HMM_Momentum_Agent",
+        "entry_price": 56.145,
+        "quantity": 36.91121204025291,
+        "stop_loss_price": 55.26402039339353,
+        "take_profit_price": 57.90695921321295,
+        "state": "OPEN",
+        "cooldown_reason": null
+    },
+    "ORCL": {
+        "symbol": "ORCL",
+        "agent_name": "HMM_Momentum_Agent",
+        "entry_price": 289.07,
+        "quantity": 6.882346836406407,
+        "stop_loss_price": 285.4115088636499,
+        "take_profit_price": 296.3869822727002,
+        "state": "OPEN",
+        "cooldown_reason": null
+    },
+    "HOOD": {
+        "symbol": "HOOD",
+        "agent_name": "HMM_Momentum_Agent",
+        "entry_price": 139.15,
+        "quantity": 13.701688825008983,
+        "stop_loss_price": 130.79714626511392,
+        "take_profit_price": 155.85570746977214,
+        "state": "OPEN",
+        "cooldown_reason": null
+    },
+    "MMM": {
+        "symbol": "MMM",
+        "agent_name": "HMM_Momentum_Agent",
+        "entry_price": 156.04,
+        "quantity": 11.156113816970008,
+        "stop_loss_price": 154.36450631397105,
+        "take_profit_price": 159.39098737205785,
+        "state": "OPEN",
+        "cooldown_reason": null
+    },
+    "ALB": {
+        "symbol": "ALB",
+        "agent_name": "HMM_Momentum_Agent",
+        "entry_price": 84.485,
+        "quantity": 19.623601822808784,
+        "stop_loss_price": 81.17414606687962,
+        "take_profit_price": 91.10670786624078,
+        "state": "OPEN",
+        "cooldown_reason": null
+    },
+    "TECH": {
+        "symbol": "TECH",
+        "agent_name": "HMM_Momentum_Agent",
+        "entry_price": 59.89,
+        "quantity": 24.91417598931374,
+        "stop_loss_price": 58.60389602711257,
+        "take_profit_price": 62.462207945774864,
+        "state": "OPEN",
+        "cooldown_reason": null
+    },
+    "QCOM": {
+        "symbol": "QCOM",
+        "agent_name": "HMM_Momentum_Agent",
+        "entry_price": 166.515,
+        "quantity": 8.463021349427981,
+        "stop_loss_price": 164.03259686388492,
+        "take_profit_price": 171.4798062722301,
+        "state": "OPEN",
+        "cooldown_reason": null
+    },
+    "EBAY": {
+        "symbol": "EBAY",
+        "agent_name": "HMM_Momentum_Agent",
+        "entry_price": 87.56,
+        "quantity": 15.147555961626312,
+        "stop_loss_price": 86.38487456920166,
+        "take_profit_price": 89.9102508615967,
+        "state": "OPEN",
+        "cooldown_reason": null
+    },
+    "CPAY": {
+        "symbol": "CPAY",
+        "agent_name": "HMM_Momentum_Agent",
+        "entry_price": 286.34,
+        "quantity": 4.342494936089963,
+        "stop_loss_price": 282.40923867850927,
+        "take_profit_price": 294.2015226429814,
+        "state": "OPEN",
+        "cooldown_reason": null
+    },
+    "NRG": {
+        "symbol": "NRG",
+        "agent_name": "HMM_Momentum_Agent",
+        "entry_price": 161.975,
+        "quantity": 7.164871122086742,
+        "stop_loss_price": 159.00566098392216,
+        "take_profit_price": 167.91367803215567,
+        "state": "OPEN",
+        "cooldown_reason": null
+    },
+    "BX": {
+        "symbol": "BX",
+        "agent_name": "HMM_Momentum_Agent",
+        "entry_price": 168.02,
+        "quantity": 6.413760266634925,
+        "stop_loss_price": 165.38159363588832,
+        "take_profit_price": 173.2968127282234,
+        "state": "OPEN",
+        "cooldown_reason": null
+    },
+    "EG": {
+        "symbol": "EG",
+        "agent_name": "HMM_Momentum_Agent",
+        "entry_price": 353.4,
+        "quantity": 2.8147707979626486,
+        "stop_loss_price": 348.4997641114026,
+        "take_profit_price": 363.2004717771947,
+        "state": "OPEN",
+        "cooldown_reason": null
+    },
+    "AFL": {
+        "symbol": "AFL",
+        "agent_name": "HMM_Momentum_Agent",
+        "entry_price": 110.79,
+        "quantity": 8.230435959924181,
+        "stop_loss_price": 109.7809467314754,
+        "take_profit_price": 112.80810653704923,
+        "state": "OPEN",
+        "cooldown_reason": null
+    },
+    "TMUS": {
+        "symbol": "TMUS",
+        "agent_name": "HMM_Momentum_Agent",
+        "entry_price": 233.3,
+        "quantity": 3.5531504500642948,
+        "stop_loss_price": 230.70395592800858,
+        "take_profit_price": 238.4920881439829,
+        "state": "OPEN",
+        "cooldown_reason": null
+    },
+    "LLY": {
+        "symbol": "LLY",
+        "agent_name": "HMM_Momentum_Agent",
+        "entry_price": 825.7,
+        "quantity": 0.9035485042993823,
+        "stop_loss_price": 815.0312957300138,
+        "take_profit_price": 847.0374085399726,
+        "state": "OPEN",
+        "cooldown_reason": null
+    },
+    "REG": {
+        "symbol": "REG",
+        "agent_name": "HMM_Momentum_Agent",
+        "entry_price": 72.09,
+        "quantity": 9.199056734637258,
+        "stop_loss_price": 71.34942395798167,
+        "take_profit_price": 73.57115208403665,
+        "state": "OPEN",
+        "cooldown_reason": null
+    },
+    "MTB": {
+        "symbol": "MTB",
+        "agent_name": "HMM_Momentum_Agent",
+        "entry_price": 195.13,
+        "quantity": 2.973761082355353,
+        "stop_loss_price": 192.37227644161206,
+        "take_profit_price": 200.64544711677584,
+        "state": "OPEN",
+        "cooldown_reason": null
+    },
+    "AOS": {
+        "symbol": "AOS",
+        "agent_name": "HMM_Momentum_Agent",
+        "entry_price": 73.09,
+        "quantity": 6.804898070871528,
+        "stop_loss_price": 71.9146950424973,
+        "take_profit_price": 75.44060991500541,
+        "state": "OPEN",
+        "cooldown_reason": null
+    },
+    "JNJ": {
+        "symbol": "JNJ",
+        "agent_name": "HMM_Momentum_Agent",
+        "entry_price": 186.05,
+        "quantity": 2.2277882289707067,
+        "stop_loss_price": 184.22257364115913,
+        "take_profit_price": 189.70485271768177,
+        "state": "OPEN",
+        "cooldown_reason": null
+    },
+    "VZ": {
+        "symbol": "VZ",
+        "agent_name": "HMM_Momentum_Agent",
+        "entry_price": 43.83,
+        "quantity": 5.673967602099019,
+        "stop_loss_price": 43.404791958618034,
+        "take_profit_price": 44.68041608276392,
+        "state": "OPEN",
+        "cooldown_reason": null
     }
 }
