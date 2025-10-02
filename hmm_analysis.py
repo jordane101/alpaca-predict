@@ -76,7 +76,10 @@ class AnalyzeHMM:
         self.state_means = None
         self.state_stds = None
         self.state_regimes = None
-        self.model_path = self.MODEL_DIR / f"{self.ticker}_{self.n_components}_{self.model_order}.pkl"
+
+        # Sanitize ticker for use in filenames (e.g., replace 'ETH/USD' with 'ETH_USD')
+        safe_ticker_filename = self.ticker.replace('/', '_')
+        self.model_path = self.MODEL_DIR / f"{safe_ticker_filename}_{self.n_components}_{self.model_order}.pkl"
 
         if self.model_order < 1:
             raise ValueError("Model order must be 1 or greater.")
@@ -296,9 +299,9 @@ class AnalyzeHMM:
                 model_data = pickle.load(f)
 
             trained_at = model_data.get('trained_at', datetime.min)
-            if (datetime.now() - trained_at).days > max_age_days:
+            if (datetime.now().date() - trained_at.date()).days > max_age_days:
                 if self.verbose:
-                    logging.info(f"Model for {self.ticker} is older than {max_age_days} days. Will retrain.")
+                    logging.info(f"Model for {self.ticker} is older than {max_age_days} calendar days. Will retrain.")
                 return False
 
             self.model = model_data['model']

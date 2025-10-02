@@ -129,9 +129,10 @@ class Backtester:
                 output_dir = "outputs"
                 os.makedirs(output_dir, exist_ok=True)
                 strategy_name = self.strategy.__class__.__name__
-                filename = f"{output_dir}/backtest_{self.ticker}_{strategy_name}_{self.start_date}_to_{self.end_date}.html"
-                fig.write_html(filename)
-                print(f"Plot saved to: {filename}")
+                safe_ticker = self.ticker.replace('/', '_')
+                filepath = f"{output_dir}/backtest_{safe_ticker}_{strategy_name}_{self.start_date}_to_{self.end_date}.html"
+                fig.write_html(filepath)
+                print(f"Plot saved to: {filepath}")
             except Exception as e:
                 print(f"Could not generate or save plot. Reason: {e}")
 

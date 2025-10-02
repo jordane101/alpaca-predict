@@ -25,7 +25,7 @@ if __name__ == "__main__":
                 optimize_order=False, # Set to True to find best model order per stock (slower)
                 max_order_to_test=5,
                 ranking_metric='sharpe', # 'sharpe' or 'return'
-                retrain_max_age_days=1,  # Retrain models every morning.
+                retrain_max_age_days=0,  # Retrain if model isn't from today.
                 walk_forward_window=252, # ~1 year of training data for backtests
                 retrain_period=63        # ~1 quarter before retraining in backtests
             ),
@@ -39,16 +39,22 @@ if __name__ == "__main__":
             "take_profit_pct": 0.10, # 2 * stop_loss_pct
             "max_analysis_workers": 4,    # Limit CPU usage for analysis. Default is os.cpu_count() - 1.
         }
-        # ,{
-        #     "name": "Donchian_Breakout_Agent",
-        #     "strategy": DonchianBreakoutStrategy(period=20), # 20-day breakout
-        #     "max_positions": 10,
-        #     "total_allocation_pct": 0.10, # Use 20% of total equity for this agent
-        #     "stop_loss_pct": 0.07,
-        #     "take_profit_pct": 0.15,
-        #     # Using default waterfall allocation for this agent
-        #     "waterfall_allocation_pcts": None,
-        # }
+        ,{
+            "name": "HMM_Crypto_Agent",
+            "asset_class": "crypto", # Add this for a crypto agent
+            "strategy": HMMStrategy(
+                n_components=3,
+                model_order=1,
+                ranking_metric='sharpe',
+                retrain_max_age_days=0
+            ),
+            "max_positions": 5,
+            "total_allocation_pct": 0.20,
+            "stop_loss_pct": 0.10,
+            "take_profit_pct": 0.20,
+            "max_analysis_workers": 4,
+        }
+
     ]
 
     # --- Schedule Configuration ---
@@ -56,7 +62,7 @@ if __name__ == "__main__":
     # This example runs at 9:45 AM and 3:45 PM Eastern Time.
     # The websocket connection will handle stop-loss/take-profit in real-time.
     SCHEDULE_CONFIG = {
-        'hour': '8,15',
+        'hour': '8,16',
         'minute': '45',
         'timezone': 'America/New_York'
     }

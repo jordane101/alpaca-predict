@@ -109,9 +109,10 @@ class Optimizer:
             )
             output_dir = "outputs"
             os.makedirs(output_dir, exist_ok=True)
-            filename = f"{output_dir}/optimize_{self.ticker}_DonchianBreakoutStrategy_{param_name}.html"
-            fig.write_html(filename)
-            print(f"Plot saved to: {filename}")
+            safe_ticker = self.ticker.replace('/', '_')
+            filepath = f"{output_dir}/optimize_{safe_ticker}_DonchianBreakoutStrategy_{param_name}.html"
+            fig.write_html(filepath)
+            print(f"Plot saved to: {filepath}")
         except Exception as e:
             print(f"Could not generate or save plot. Reason: {e}")
 

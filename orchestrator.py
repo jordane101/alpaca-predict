@@ -13,8 +13,9 @@ from alpaca.trading.client import TradingClient
 from alpaca.data.historical import StockHistoricalDataClient
 from alpaca.trading.stream import TradingStream
 from alpaca.data.live.stock import StockDataStream
+from alpaca.data.live.crypto import CryptoDataStream
 from alpaca.trading.requests import MarketOrderRequest, ClosePositionRequest
-from alpaca.data.requests import StockLatestTradeRequest as LatestTradeRequest
+from alpaca.data.requests import StockLatestTradeRequest as LatestTradeRequest, CryptoLatestTradeRequest
 from alpaca.trading.enums import OrderSide, TimeInForce
 from alpaca.common.exceptions import APIError
 from alpaca.data.enums import DataFeed
@@ -42,8 +43,9 @@ class Orchestrator:
         """
         self.trading_client = TradingClient(self.KEY, self.SECRET, paper=True)
         self.data_client = StockHistoricalDataClient(self.KEY, self.SECRET)
-        # For market data (trades for SL/TP)
-        self.market_stream_client = StockDataStream(self.KEY, self.SECRET, feed=DataFeed.IEX)
+        # For market data (trades for SL/TP), we need separate clients for stocks and crypto
+        self.stock_market_stream_client = StockDataStream(self.KEY, self.SECRET, feed=DataFeed.IEX)
+        self.crypto_market_stream_client = CryptoDataStream(self.KEY, self.SECRET)
         # For account data (order fills)
         self.trade_stream_client = TradingStream(self.KEY, self.SECRET, paper=True)
         self.scheduler = AsyncIOScheduler()
@@ -57,7 +59,8 @@ class Orchestrator:
         ]
 
         self.managed_positions = self._load_managed_positions()
-        self.current_subscriptions = set()
+        self.current_stock_subscriptions = set()
+        self.current_crypto_subscriptions = set()
         print(f"Initialized {len(self.agents)} agents: {[agent.name for agent in self.agents]}")
 
     def _get_agent_by_name(self, name: str) -> TradingAgent | None:
@@ -143,22 +146,43 @@ class Orchestrator:
                 del self.managed_positions[ticker]
         print(f"Synced. Now managing: {list(self.managed_positions.keys())}")
 
-    async def _run_market_stream(self):
-        """Manages the market data websocket connection with a resilient loop."""
+    async def _run_stock_market_stream(self):
+        """Manages the stock market data websocket connection with a resilient loop."""
         loop = asyncio.get_running_loop()
         while True:
             try:
-                print("Connecting to Market Data WebSocket...")
+                print("Connecting to Stock Market Data WebSocket...")
                 # Re-create the client to ensure a clean state on each connection attempt.
-                self.market_stream_client = StockDataStream(self.KEY, self.SECRET, feed=DataFeed.IEX)
-                self.current_subscriptions = set()  # Reset our subscription state
+                self.stock_market_stream_client = StockDataStream(self.KEY, self.SECRET, feed=DataFeed.IEX)
+                self.current_stock_subscriptions = set()  # Reset our subscription state
 
                 await self._update_subscriptions()  # Subscribe to trades for managed positions
 
                 # Run the blocking stream in a separate thread
-                await loop.run_in_executor(None, self.market_stream_client.run)
+                await loop.run_in_executor(None, self.stock_market_stream_client.run)
 
-                print("Market Data WebSocket stream has been closed. Exiting monitoring loop.")
+                print("Stock Market Data WebSocket stream has been closed. Exiting monitoring loop.")
+                break
+            except (asyncio.CancelledError, KeyboardInterrupt):
+                print("\nStock Market Data WebSocket stream task cancelled.")
+                break
+            except Exception as e:
+                print(f"\nStock Market Data WebSocket stream encountered an error: {e}. Reconnecting in 30 seconds...")
+                await asyncio.sleep(30)
+
+    async def _run_crypto_market_stream(self):
+        """Manages the crypto market data websocket connection with a resilient loop."""
+        loop = asyncio.get_running_loop()
+        while True:
+            try:
+                print("Connecting to Crypto Market Data WebSocket...")
+                self.crypto_market_stream_client = CryptoDataStream(self.KEY, self.SECRET)
+                self.current_crypto_subscriptions = set()
+
+                await self._update_subscriptions()
+
+                await loop.run_in_executor(None, self.crypto_market_stream_client.run)
+                print("Crypto Market Data WebSocket stream has been closed. Exiting monitoring loop.")
                 break
             except (asyncio.CancelledError, KeyboardInterrupt):
                 print("\nMarket Data WebSocket stream task cancelled.")
@@ -203,11 +227,12 @@ class Orchestrator:
         print(f"\nAnalysis cycle scheduled. First run will be at the next configured time: {schedule_config}")
 
         # 3. Start the two WebSocket stream handlers concurrently.
-        market_stream_task = asyncio.create_task(self._run_market_stream())
+        stock_stream_task = asyncio.create_task(self._run_stock_market_stream())
+        crypto_stream_task = asyncio.create_task(self._run_crypto_market_stream())
         trade_stream_task = asyncio.create_task(self._run_trade_stream())
 
         # This will run until one of the tasks finishes or is cancelled.
-        await asyncio.gather(market_stream_task, trade_stream_task)
+        await asyncio.gather(stock_stream_task, crypto_stream_task, trade_stream_task)
 
     async def run_analysis_cycle(self):
         """
@@ -275,7 +300,8 @@ class Orchestrator:
 
         # The stream clients' `run()` method will exit when `close()` is called.
         print("Closing WebSocket streams...")
-        await self.market_stream_client.close()
+        await self.stock_market_stream_client.close()
+        await self.crypto_market_stream_client.close()
         await self.trade_stream_client.close()
         print("WebSocket stream clients have been closed.")
 
@@ -308,8 +334,12 @@ class Orchestrator:
             position.transition_on_rebuy_submit()
             await self._execute_rebuy(position)
 
-    async def on_order_update(self, order):
+    async def on_order_update(self, trade_update):
         """Callback for real-time order updates from the WebSocket."""
+        # The trade_update object is a wrapper. The actual order data is in the 'order' attribute.
+        order = trade_update.order
+
+        # We only care about final fills for state transitions.
         if order.status != 'filled':
             return
 
@@ -318,7 +348,7 @@ class Orchestrator:
         if not position:
             return
 
-        print(f"\nReceived FILL confirmation for {order.side} order on {symbol}.")
+        print(f"\nReceived FILL confirmation for {order.side} order on {symbol} (Status: {order.status}).")
 
         if order.side == 'sell' and position.state == PositionState.PENDING_SELL:
             position.transition_on_sell_fill()
@@ -362,8 +392,13 @@ class Orchestrator:
             position = self.managed_positions.get(ticker_to_sell)
             if position and getattr(position, 'agent_name', None) == agent.name and position.state == PositionState.OPEN:
                 print(f"Decision: {agent.name} to SELL {ticker_to_sell} -> APPROVED")
+                agent_for_sell = self._get_agent_by_name(getattr(position, 'agent_name', None))
+                if not agent_for_sell:
+                    print(f"  -> CRITICAL: Could not find agent for selling {ticker_to_sell}. Cannot get latest price. Skipping.")
+                    continue
+
                 # Use the current price for the transition reason, though it will be sold at market
-                latest_price = await self._get_latest_price(ticker_to_sell) or position.entry_price
+                latest_price = await self._get_latest_price(agent_for_sell, ticker_to_sell) or position.entry_price
                 position.transition_on_sell_submit(latest_price)
                 await self._execute_sell(ticker_to_sell)
             elif position: # It's managed, but not by this agent or not in an open state
@@ -383,7 +418,7 @@ class Orchestrator:
                 print(f"Decision: {agent.name} to BUY {ticker} -> DENIED (Position already managed, state: {position.state.name}).")
                 continue
 
-            latest_price = await self._get_latest_price(ticker)
+            latest_price = await self._get_latest_price(agent, ticker)
             if not latest_price:
                 print(f"  -> Could not get latest price for {ticker}. Skipping buy.")
                 continue
@@ -455,11 +490,13 @@ class Orchestrator:
 
         print(f"  -> Submitting BUY order for {ticker} (Notional: ${notional_value:.2f}).")
         try:
+            # Crypto orders must use GTC (Good 'Til Canceled) time in force.
+            tif = TimeInForce.GTC if agent.asset_class == 'crypto' else TimeInForce.DAY
             market_order_data = MarketOrderRequest(
                 symbol=ticker,
                 notional=notional_value,
                 side=OrderSide.BUY,
-                time_in_force=TimeInForce.DAY
+                time_in_force=tif
             )
             loop = asyncio.get_running_loop()
             # Pass market_order_data as a positional argument, as run_in_executor
@@ -494,11 +531,19 @@ class Orchestrator:
 
         print(f"  -> Submitting REBUY order for {position.symbol} (Qty: {quantity_to_buy}).")
         try:
+            agent = self._get_agent_by_name(getattr(position, 'agent_name', None))
+            if not agent:
+                print(f"  -> CRITICAL: Could not find agent for rebuy of {position.symbol}. Cannot determine time_in_force. Skipping.")
+                return False
+
+            # Crypto orders must use GTC (Good 'Til Canceled) time in force.
+            tif = TimeInForce.GTC if agent.asset_class == 'crypto' else TimeInForce.DAY
+
             market_order_data = MarketOrderRequest(
                 symbol=position.symbol,
                 qty=quantity_to_buy,
                 side=OrderSide.BUY,
-                time_in_force=TimeInForce.DAY
+                time_in_force=tif
             )
             loop = asyncio.get_running_loop()
             await loop.run_in_executor(None, self.trading_client.submit_order, market_order_data)
@@ -507,16 +552,18 @@ class Orchestrator:
             print(f"  -> Failed to submit REBUY order for {position.symbol}. Reason: {e}")
             return False
 
-    async def _get_latest_price(self, ticker: str) -> float | None:
-        """Fetches the latest trade price for a ticker."""
+    async def _get_latest_price(self, agent: TradingAgent, ticker: str) -> float | None:
+        """Fetches the latest trade price for a ticker using the agent's data client."""
         try:
             loop = asyncio.get_running_loop()
-            # Explicitly create a request object. The version of the library
-            # being used appears to require a request object rather than
-            # accepting the ticker as a string directly for this method.
-            request_params = LatestTradeRequest(symbol_or_symbols=ticker, feed=DataFeed.IEX)
-            latest_trade_map = await loop.run_in_executor(None, self.data_client.get_stock_latest_trade, request_params)
-            # The result is a dictionary mapping symbols to trade objects, even for a single symbol.
+            if agent.asset_class == 'crypto':
+                request_params = CryptoLatestTradeRequest(symbol_or_symbols=ticker)
+                # The agent has the correct data client
+                latest_trade_map = await loop.run_in_executor(None, agent.data_client.get_crypto_latest_trade, request_params)
+            else:
+                request_params = LatestTradeRequest(symbol_or_symbols=ticker, feed=DataFeed.IEX)
+                latest_trade_map = await loop.run_in_executor(None, agent.data_client.get_stock_latest_trade, request_params)
+
             if latest_trade_map and ticker in latest_trade_map:
                 return latest_trade_map[ticker].price
         except Exception as e:
@@ -525,24 +572,47 @@ class Orchestrator:
 
     async def _update_subscriptions(self):
         """
-        Syncs the market data WebSocket subscriptions with the current positions.
+        Syncs the market data WebSocket subscriptions for both stocks and crypto
+        with the current managed positions.
         """
         print("\nUpdating WebSocket market data subscriptions...")
-        # We must track subscription state ourselves, as the client object can be recreated.
-        current_subs = self.current_subscriptions
-        desired_subs = set(self.managed_positions.keys())
 
-        to_sub = desired_subs - current_subs
-        to_unsub = current_subs - desired_subs
+        desired_stock_subs = set()
+        desired_crypto_subs = set()
 
-        if to_sub:
-            print(f"  Subscribing to trades for: {list(to_sub)}")
-            self.market_stream_client.subscribe_trades(self.on_trade, *to_sub)
-            self.current_subscriptions.update(to_sub)
-        if to_unsub:
-            print(f"  Unsubscribing from trades for: {list(to_unsub)}")
-            self.market_stream_client.unsubscribe_trades(*to_unsub)
-            self.current_subscriptions.difference_update(to_unsub)
+        for symbol, position in self.managed_positions.items():
+            agent = self._get_agent_by_name(getattr(position, 'agent_name', None))
+            if agent:
+                if agent.asset_class == 'crypto':
+                    desired_crypto_subs.add(symbol)
+                else:  # us_equity
+                    desired_stock_subs.add(symbol)
 
-        if not to_sub and not to_unsub:
+        # --- Sync Stock Subscriptions ---
+        to_sub_stock = desired_stock_subs - self.current_stock_subscriptions
+        to_unsub_stock = self.current_stock_subscriptions - desired_stock_subs
+
+        if to_sub_stock:
+            print(f"  Subscribing to stock trades for: {list(to_sub_stock)}")
+            self.stock_market_stream_client.subscribe_trades(self.on_trade, *to_sub_stock)
+            self.current_stock_subscriptions.update(to_sub_stock)
+        if to_unsub_stock:
+            print(f"  Unsubscribing from stock trades for: {list(to_unsub_stock)}")
+            self.stock_market_stream_client.unsubscribe_trades(*to_unsub_stock)
+            self.current_stock_subscriptions.difference_update(to_unsub_stock)
+
+        # --- Sync Crypto Subscriptions ---
+        to_sub_crypto = desired_crypto_subs - self.current_crypto_subscriptions
+        to_unsub_crypto = self.current_crypto_subscriptions - desired_crypto_subs
+
+        if to_sub_crypto:
+            print(f"  Subscribing to crypto trades for: {list(to_sub_crypto)}")
+            self.crypto_market_stream_client.subscribe_trades(self.on_trade, *to_sub_crypto)
+            self.current_crypto_subscriptions.update(to_sub_crypto)
+        if to_unsub_crypto:
+            print(f"  Unsubscribing from crypto trades for: {list(to_unsub_crypto)}")
+            self.crypto_market_stream_client.unsubscribe_trades(*to_unsub_crypto)
+            self.current_crypto_subscriptions.difference_update(to_unsub_crypto)
+
+        if not (to_sub_stock or to_unsub_stock or to_sub_crypto or to_unsub_crypto):
             print("  Subscriptions are already up to date.")

@@ -15,20 +15,20 @@ from alpaca.trading.requests import MarketOrderRequest, ClosePositionRequest
 from alpaca.trading.enums import OrderSide, TimeInForce, AssetClass
 from alpaca.common.exceptions import APIError
 from alpaca.data.enums import DataFeed
-from alpaca.data.historical import StockHistoricalDataClient
-from alpaca.data.requests import StockBarsRequest
+from alpaca.data.historical import StockHistoricalDataClient, CryptoHistoricalDataClient
+from alpaca.data.requests import StockBarsRequest, CryptoBarsRequest
 from alpaca.data.timeframe import TimeFrame
 
 from strategies import BaseStrategy
 
-def _worker_analyze_ticker(strategy: BaseStrategy, sp500_tickers: list, ticker: str, bars_df: pd.DataFrame, is_held: bool):
+def _worker_analyze_ticker(strategy: BaseStrategy, tradable_universe: list, ticker: str, bars_df: pd.DataFrame, is_held: bool):
     """
     Worker function for parallel analysis. Runs in a separate process to avoid the GIL.
     This function is defined at the top level to ensure it can be pickled by ProcessPoolExecutor.
 
     Args:
         strategy (BaseStrategy): The strategy instance to use for analysis.
-        sp500_tickers (list): A list of S&P 500 tickers.
+        tradable_universe (list): A list of tickers in the agent's universe (e.g., S&P 500 or crypto list).
         ticker (str): The stock ticker to analyze.
         bars_df (pd.DataFrame): A DataFrame of historical bar data for the ticker.
         is_held (bool): Whether the ticker is currently in the portfolio.
@@ -45,7 +45,7 @@ def _worker_analyze_ticker(strategy: BaseStrategy, sp500_tickers: list, ticker: 
         elif is_held:
             print(f"  -> HOLD SIGNAL for {ticker} (Outlook: {outlook}).")
             return 'no_action', ticker
-        elif not is_held and ticker in sp500_tickers and outlook == 'positive':
+        elif not is_held and ticker in tradable_universe and outlook == 'positive':
             print(f"  -> BUY SIGNAL for {ticker}. Ranking Strength: {data['ranking_strength']:.4f}")
             return 'positive', data
         else:
@@ -63,7 +63,7 @@ class TradingAgent:
     defined capital allocation.
     """
 
-    def __init__(self, name: str, strategy: BaseStrategy, trading_client: TradingClient, data_client: StockHistoricalDataClient, max_positions: int = 10, total_allocation_pct: float = 0.5, waterfall_allocation_pcts: list = None, stop_loss_pct: float = None, take_profit_pct: float = None, max_analysis_workers: int = 8):
+    def __init__(self, name: str, strategy: BaseStrategy, trading_client: TradingClient, data_client: StockHistoricalDataClient, max_positions: int = 10, total_allocation_pct: float = 0.5, waterfall_allocation_pcts: list = None, stop_loss_pct: float = None, take_profit_pct: float = None, max_analysis_workers: int = 8, asset_class: str = 'us_equity'):
         """
         Initializes the agent and the Alpaca trading client.
 
@@ -80,11 +80,11 @@ class TradingAgent:
                                                      The list should sum to 1.0.
             stop_loss_pct (float, optional): The percentage loss at which to trigger a stop-loss sell (e.g., 0.05 for 5%). Defaults to None.
             take_profit_pct (float, optional): The percentage gain at which to trigger a take-profit sell (e.g., 0.10 for 10%). Defaults to None.
-            max_analysis_workers (int, optional): The max number of processes to use for analysis. Defaults to os.cpu_count() - 1.
+            max_analysis_workers (int, optional): The max number of processes for analysis. Defaults to os.cpu_count() - 1.
+            asset_class (str, optional): The class of assets to trade ('us_equity' or 'crypto'). Defaults to 'us_equity'.
         """
         self.name = name
         self.trading_client = trading_client
-        self.data_client = data_client
         self.strategy = strategy
         self.max_positions = max_positions
         self.total_allocation_pct = total_allocation_pct
@@ -92,7 +92,17 @@ class TradingAgent:
         self.take_profit_pct = take_profit_pct
         self.waterfall_allocation_pcts = waterfall_allocation_pcts
         self.max_analysis_workers = max_analysis_workers
-        self.sp500_tickers = self._get_sp500_tickers()
+        self.asset_class = asset_class
+
+        # Initialize the correct data client and ticker universe based on asset class
+        if self.asset_class == 'crypto':
+            self.data_client = CryptoHistoricalDataClient(os.getenv("PAPER_KEY"), os.getenv("PAPER_SEC"))
+            self.tradable_tickers = self._get_crypto_tickers()
+            print(f"Crypto agent '{self.name}' initialized. Trading: {self.tradable_tickers}")
+        else:  # 'us_equity'
+            self.data_client = data_client  # Use the one passed from Orchestrator
+            self.tradable_tickers = self._get_sp500_tickers()
+            print(f"Equity agent '{self.name}' initialized.")
 
         if not (0 < self.total_allocation_pct <= 1.0):
             raise ValueError("total_allocation_pct must be between 0 and 1.0.")
@@ -151,7 +161,10 @@ class TradingAgent:
 
         print("Checking for stop-loss and take-profit triggers...")
         for p in positions:
-            if p.asset_class != AssetClass.US_EQUITY:
+            # Ensure agent only manages assets of its designated class
+            if self.asset_class == 'us_equity' and p.asset_class != AssetClass.US_EQUITY:
+                continue
+            if self.asset_class == 'crypto' and p.asset_class != AssetClass.CRYPTO:
                 continue
 
             unrealized_plpc = float(p.unrealized_plpc)
@@ -170,7 +183,7 @@ class TradingAgent:
 
     def _scan_and_analyze_market(self, held_tickers):
         """Scans, fetches data, and analyzes tickers to generate trade signals."""
-        tickers_to_analyze = sorted(list(set(self.sp500_tickers) | held_tickers))
+        tickers_to_analyze = sorted(list(set(self.tradable_tickers) | held_tickers))
         if not tickers_to_analyze:
             print("No tickers to analyze.")
             return [], []
@@ -193,14 +206,24 @@ class TradingAgent:
             try:
                 end_date = (datetime.now() - timedelta(days=1)).strftime('%Y-%m-%d')
                 start_date = (datetime.now() - timedelta(days=365 * 2)).strftime('%Y-%m-%d')
-                request_params = StockBarsRequest(
-                    symbol_or_symbols=batch,
-                    timeframe=TimeFrame.Day,
-                    start=start_date,
-                    end=end_date,
-                    feed=DataFeed.IEX
-                )
-                bars_data = self.data_client.get_stock_bars(request_params)
+
+                if self.asset_class == 'crypto':
+                    request_params = CryptoBarsRequest(
+                        symbol_or_symbols=batch,
+                        timeframe=TimeFrame.Day,
+                        start=start_date,
+                        end=end_date
+                    )
+                    bars_data = self.data_client.get_crypto_bars(request_params)
+                else:  # us_equity
+                    request_params = StockBarsRequest(
+                        symbol_or_symbols=batch,
+                        timeframe=TimeFrame.Day,
+                        start=start_date,
+                        end=end_date,
+                        feed=DataFeed.IEX
+                    )
+                    bars_data = self.data_client.get_stock_bars(request_params)
 
                 if bars_data.df.empty:
                     print(f"    -> API returned no data for batch {batch_num + 1}.")
@@ -217,7 +240,7 @@ class TradingAgent:
                         if ticker in grouped_data.groups:
                             ticker_df = grouped_data.get_group(ticker).reset_index(level='symbol', drop=True)
                             is_held = ticker in held_tickers
-                            future = executor.submit(_worker_analyze_ticker, self.strategy, self.sp500_tickers, ticker, ticker_df, is_held)
+                            future = executor.submit(_worker_analyze_ticker, self.strategy, self.tradable_tickers, ticker, ticker_df, is_held)
                             future_to_ticker[future] = ticker
 
                     for i, future in enumerate(as_completed(future_to_ticker)):
@@ -286,6 +309,18 @@ class TradingAgent:
                 buy_decisions.append(pick)
 
         return buy_decisions
+
+    def _get_crypto_tickers(self):
+        """Fetches the list of crypto tickers from an environment variable."""
+        print("Fetching crypto tickers from environment variable CRYPTO_TICKERS...")
+        crypto_list_str = os.getenv("CRYPTO_TICKERS")
+        if not crypto_list_str:
+            print("Warning: CRYPTO_TICKERS environment variable not set. No crypto tickers to trade.")
+            return []
+
+        tickers = [ticker.strip() for ticker in crypto_list_str.split(',')]
+        print(f"Found {len(tickers)} crypto tickers.")
+        return tickers
 
     def _get_sp500_tickers(self):
         """Fetches the list of S&P 500 tickers from Wikipedia."""
