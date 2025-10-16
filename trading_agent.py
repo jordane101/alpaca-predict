@@ -38,6 +38,8 @@ def _worker_analyze_ticker(strategy: BaseStrategy, tradable_universe: list, tick
     """
     try:
         outlook, data = strategy.analyze(ticker, bars_df)
+        print(f"  -> Analysis result for {ticker}: Outlook = {outlook}, Ranking Strength = {data.get('ranking_strength', 'N/A')}") # Debug
+
 
         if is_held and outlook == 'negative':
             print(f"  -> SELL SIGNAL for held position {ticker}.")
@@ -209,12 +211,13 @@ class TradingAgent:
 
                 if self.asset_class == 'crypto':
                     request_params = CryptoBarsRequest(
+
                         symbol_or_symbols=batch,
                         timeframe=TimeFrame.Day,
                         start=start_date,
                         end=end_date
-                    )
-                    bars_data = self.data_client.get_crypto_bars(request_params)
+                        )
+                    bars_data = self.data_client.get_crypto_bars(request_params)                
                 else:  # us_equity
                     request_params = StockBarsRequest(
                         symbol_or_symbols=batch,
@@ -223,11 +226,12 @@ class TradingAgent:
                         end=end_date,
                         feed=DataFeed.IEX
                     )
-                    bars_data = self.data_client.get_stock_bars(request_params)
+                    bars_data = self.data_client.get_stock_bars(request_params) 
 
                 if bars_data.df.empty:
                     print(f"    -> API returned no data for batch {batch_num + 1}.")
                     continue
+
 
                 grouped_data = bars_data.df.groupby('symbol')
 

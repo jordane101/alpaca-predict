@@ -5,7 +5,9 @@ This is an exploration into Agentic AI in the stock market. By using a Hidden Ma
 
 ## How to try it yourself:
 
+0. Create Alpaca keys <a href="https://alpaca.markets/">Alpaca</a>
 1. Clone the repo
+    - 1a. Copy Alpaca key into .env file in top level directory (alpaca-predict/.env)
 2. Create a virtual environment
     - Windows <code>python -m virtualenv .venv</code>
     - Mac/Linux <code>python -m virtualenv .venv</code>

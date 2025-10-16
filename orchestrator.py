@@ -55,7 +55,7 @@ class Orchestrator:
                 trading_client=self.trading_client,
                 data_client=self.data_client,
                 **config
-            ) for config in agent_configs
+            ) for config in agent_configs # Initialize agents from configurations
         ]
 
         self.managed_positions = self._load_managed_positions()
@@ -75,33 +75,38 @@ class Orchestrator:
         if os.path.exists(self.OWNERSHIP_FILE):
             try:
                 with open(self.OWNERSHIP_FILE, 'r') as f:
-                    print(f"Loading managed positions from {self.OWNERSHIP_FILE}")
+                    print(f"Loading managed positions from {self.OWNERSHIP_FILE}...")
                     positions_data = json.load(f)
                     if not positions_data: # Handles empty JSON object or null
                         return {}
                     
                     managed_positions = {}
-                    for symbol, data in positions_data.items():
-                        # Handle backward compatibility with older file formats.
-                        position = ManagedPosition(
-                            symbol=symbol, # The symbol is the key in the JSON object.
-                            entry_price=data.get('entry_price', 0.0), # Default to 0.0, will be updated from live data.
-                            quantity=data.get('quantity', 0.0), # Default to 0.0, will be updated from live data.
-                            stop_loss_price=data.get('stop_loss_price'),
-                            take_profit_price=data.get('take_profit_price')
-                        )
-                        # State might be missing in old format, default to OPEN.
-                        position.state = PositionState[data.get('state', 'OPEN')]
+                    for agent_name, positions in positions_data.items():
+                        agent = self._get_agent_by_name(agent_name)
+                        if not agent:
+                            print(f"Warning: Agent {agent_name} not found. Skipping positions for this agent.")
+                            continue
 
-                        if data.get('cooldown_reason'):
-                            position.cooldown_reason = CooldownReason[data['cooldown_reason']]
-                        
-                        # Associate the agent for SL/TP fallbacks on rebuy.
-                        # The key for the agent's name was 'owner' in the old format.
-                        position.agent_name = data.get('agent_name') or data.get('owner')
+                        for position_data in positions:
+                            symbol = position_data['symbol']
+                            position = ManagedPosition(
+                                symbol=symbol,
+                                entry_price=position_data.get('entry_price', 0.0),
+                                quantity=position_data.get('quantity', 0.0),
+                                stop_loss_price=position_data.get('stop_loss_price'),
+                                take_profit_price=position_data.get('take_profit_price')
+                            )
+                            position.state = PositionState[position_data.get('state', 'OPEN')]
+                            position.agent_name = agent_name
 
-                        managed_positions[symbol] = position
+                            if position_data.get('cooldown_reason'):
+                                position.cooldown_reason = CooldownReason[position_data['cooldown_reason']]
+
+                            managed_positions[symbol] = position
+
+                    print(f"  -> Loaded {len(managed_positions)} managed positions.")
                     return managed_positions
+
 
             except (json.JSONDecodeError, IOError, KeyError) as e:
                 print(f"Warning: Could not load ownership file. Starting fresh. Error: {e}")
@@ -110,22 +115,25 @@ class Orchestrator:
     def _save_managed_positions(self):
         """Converts ManagedPosition objects to dictionaries and saves them to a file."""
         try:
-            positions_to_save = {}
+            positions_by_agent = {}
             for symbol, position in self.managed_positions.items():
-                positions_to_save[symbol] = {
-                    "symbol": position.symbol,
-                    "agent_name": getattr(position, 'agent_name', None),
-                    "entry_price": position.entry_price,
-                    "quantity": position.quantity,
-                    "stop_loss_price": position.stop_loss_price,
-                    "take_profit_price": position.take_profit_price,
-                    "state": position.state.name,
-                    "cooldown_reason": position.cooldown_reason.name if position.cooldown_reason else None,
-                }
+                agent_name = getattr(position, 'agent_name', None)
+                if agent_name:
+                    if agent_name not in positions_by_agent:
+                        positions_by_agent[agent_name] = []
+                    positions_by_agent[agent_name].append({
+                        "symbol": position.symbol,
+                        "entry_price": position.entry_price,
+                        "quantity": position.quantity,
+                        "stop_loss_price": position.stop_loss_price,
+                        "take_profit_price": position.take_profit_price,
+                        "state": position.state.name,
+                        "cooldown_reason": position.cooldown_reason.name if position.cooldown_reason else None,
+                    })
 
             with open(self.OWNERSHIP_FILE, 'w') as f:
-                print(f"Saving {len(positions_to_save)} managed positions to {self.OWNERSHIP_FILE}")
-                json.dump(positions_to_save, f, indent=4)
+                print(f"Saving {len(positions_by_agent)} managed positions to {self.OWNERSHIP_FILE}")
+                json.dump(positions_by_agent, f, indent=4)
         except IOError as e:
             print(f"Error: Could not save ownership file. Error: {e}")
 
@@ -135,16 +143,75 @@ class Orchestrator:
         - Removes ownership for tickers that are no longer held.
         - Keeps positions in COOLING_DOWN state for re-entry monitoring.
         """
-        print("\nSyncing managed positions with live account positions...")
-        live_tickers = {p.symbol for p in account_positions}
+        print("\nSyncing managed positions with live account positions and updating details...")
+        # Normalize live tickers to have the same format as managed positions (with a slash)
+        live_tickers = {p.symbol.replace("USD", "/USD") for p in account_positions}
+
+        print(f"  -> Live account positions: {live_tickers}") # Debug: Show live tickers
 
         managed_tickers = list(self.managed_positions.keys())
         for ticker in managed_tickers:
             position = self.managed_positions[ticker]
+            print(f"  -> Checking if managed position {ticker} is still held.") # Debug
+
             if ticker not in live_tickers and position.state != PositionState.COOLING_DOWN:
                 print(f"  -> Position {ticker} (State: {position.state.name}) no longer held. Removing from management.")
                 del self.managed_positions[ticker]
+
+        # --- Add New Positions ---
+        for live_pos in account_positions:
+            ticker = live_pos.symbol.replace("USD", "/USD")
+            if ticker not in self.managed_positions:
+                print(f"  -> New position found: {ticker}. Adding to managed positions.")
+                # Find the agent that should own this position (e.g., based on some logic or config)
+                # Assign it to the first agent.
+                agent = None
+                for a in self.agents:
+                    if "crypto" in ticker.lower() and a.asset_class == "crypto":
+                        agent = a
+                        break
+                    elif "crypto" not in ticker.lower() and a.asset_class == "us_equity":
+                        agent = a
+                        break
+                
+                if not agent:
+                    agent = self.agents[0] if self.agents else None
+
+                if agent:
+
+                    position = ManagedPosition(
+                        symbol=ticker,
+                        entry_price=float(live_pos.avg_entry_price),
+                        quantity=float(live_pos.qty)
+                    )
+                    position.asset_class = agent.asset_class
+                    position.agent_name = agent.name
+                    position.state = PositionState.OPEN #New positions are open
+
+                    #Calculate SL/TP prices
+                    stop_loss_price, take_profit_price = self._calculate_price_targets(agent, ticker, float(live_pos.avg_entry_price))
+                    position.stop_loss_price = stop_loss_price
+                    position.take_profit_price = take_profit_price
+
+                    self.managed_positions[ticker] = position
+                    print(f"  -> Position {ticker} added, owned by {agent.name}.")
+                else:
+                    print(f"  -> No agents available to claim new position {ticker}!")
+
         print(f"Synced. Now managing: {list(self.managed_positions.keys())}")
+    async def _scheduled_sync_positions(self):
+        """
+        Scheduled task to sync managed positions with actual account positions.
+        """
+        print("\n--- Starting Scheduled Position Sync ---")
+        try:
+            loop = asyncio.get_running_loop()
+            positions = await loop.run_in_executor(None, self.trading_client.get_all_positions)
+            self._sync_ownership_with_account(positions)
+            self._save_managed_positions()
+            print("--- Scheduled Position Sync Complete ---")
+        except Exception as e:
+            print(f"An error occurred during the scheduled position sync: {e}")
 
     async def _run_stock_market_stream(self):
         """Manages the stock market data websocket connection with a resilient loop."""
@@ -224,6 +291,9 @@ class Orchestrator:
         # 2. Set up the scheduler for recurring analysis
         self.scheduler.add_job(self.run_analysis_cycle, 'cron', **schedule_config)
         self.scheduler.start()
+
+        # 3. Schedule the position sync task to run daily at a specific time (e.g., 03:00 AM)
+        self.scheduler.add_job(self._scheduled_sync_positions, 'cron', hour=3, minute=0)
         print(f"\nAnalysis cycle scheduled. First run will be at the next configured time: {schedule_config}")
 
         # 3. Start the two WebSocket stream handlers concurrently.
@@ -269,7 +339,7 @@ class Orchestrator:
                 owned_tickers = {
                     ticker for ticker, pos in self.managed_positions.items()
                     if getattr(pos, 'agent_name', None) == agent.name and pos.state in [PositionState.OPEN, PositionState.PENDING_SELL]
-                }
+                }                
                 decisions = await loop.run_in_executor(
                     None, agent.generate_trade_decisions, account, positions, owned_tickers
                 )
@@ -512,6 +582,7 @@ class Orchestrator:
                 stop_loss_price=stop_loss_price,
                 take_profit_price=take_profit_price
             )
+            position.asset_class = agent.asset_class # Assign asset class
             position.agent_name = agent.name
             self.managed_positions[ticker] = position
 
@@ -584,30 +655,45 @@ class Orchestrator:
             agent = self._get_agent_by_name(getattr(position, 'agent_name', None))
             if agent:
                 if agent.asset_class == 'crypto':
-                    desired_crypto_subs.add(symbol)
-                else:  # us_equity
+                    desired_crypto_subs.add(symbol.replace("/USD", "USD"))
+            else:  # us_equity
                     desired_stock_subs.add(symbol)
 
         # --- Sync Stock Subscriptions ---
         to_sub_stock = desired_stock_subs - self.current_stock_subscriptions
         to_unsub_stock = self.current_stock_subscriptions - desired_stock_subs
 
-        if to_sub_stock:
-            print(f"  Subscribing to stock trades for: {list(to_sub_stock)}")
-            self.stock_market_stream_client.subscribe_trades(self.on_trade, *to_sub_stock)
-            self.current_stock_subscriptions.update(to_sub_stock)
-        if to_unsub_stock:
-            print(f"  Unsubscribing from stock trades for: {list(to_unsub_stock)}")
-            self.stock_market_stream_client.unsubscribe_trades(*to_unsub_stock)
-            self.current_stock_subscriptions.difference_update(to_unsub_stock)
+        # Process subscriptions and unsubscriptions in batches
+        batch_size = 200  # You can adjust this based on Alpaca's symbol limit
+
+        for i in range(0, len(list(to_sub_stock)), batch_size):
+            stock_sub_batch = list(to_sub_stock)[i:i + batch_size]
+            if stock_sub_batch:
+                print(f"  Subscribing to stock trades for: {stock_sub_batch}")
+                try:
+                    self.stock_market_stream_client.subscribe_trades(self.on_trade, *stock_sub_batch)
+                    self.current_stock_subscriptions.update(stock_sub_batch)
+                except Exception as e:
+                    print(f"  Error subscribing to stock trades: {e}")
+
+        for i in range(0, len(list(to_unsub_stock)), batch_size):
+            stock_unsub_batch = list(to_unsub_stock)[i:i + batch_size]
+            if stock_unsub_batch:
+                print(f"  Unsubscribing from stock trades for: {stock_unsub_batch}")
+                try:
+                    self.stock_market_stream_client.unsubscribe_trades(*stock_unsub_batch)
+                    self.current_stock_subscriptions.difference_update(stock_unsub_batch)
+                except Exception as e:
+                    print(f"  Error unsubscribing from stock trades: {e}")
 
         # --- Sync Crypto Subscriptions ---
         to_sub_crypto = desired_crypto_subs - self.current_crypto_subscriptions
         to_unsub_crypto = self.current_crypto_subscriptions - desired_crypto_subs
 
+
         if to_sub_crypto:
             print(f"  Subscribing to crypto trades for: {list(to_sub_crypto)}")
-            self.crypto_market_stream_client.subscribe_trades(self.on_trade, *to_sub_crypto)
+            self.crypto_market_stream_client.subscribe_trades(self.on_trade, *list(to_sub_crypto))
             self.current_crypto_subscriptions.update(to_sub_crypto)
         if to_unsub_crypto:
             print(f"  Unsubscribing from crypto trades for: {list(to_unsub_crypto)}")
