@@ -1,0 +1,141 @@
+# Backtest Configuration File
+# Adjust these parameters to customize your backtests
+
+# Time Period
+backtest:
+  # Number of years to backtest (from today backwards)
+  years: 2
+  
+  # Or specify exact dates (comment out 'years' if using these)
+  # start_date: "2023-01-01"
+  # end_date: "2025-11-13"
+
+# Portfolio Settings
+portfolio:
+  initial_capital: 100000  # Starting capital in USD
+  max_positions: 10        # Maximum number of positions to hold
+  cash_usage: 0.95         # Percentage of available cash to use (0-1)
+  
+  # Rebalancing frequency in days
+  # 21 = monthly, 63 = quarterly, 126 = semi-annual
+  rebalance_days: 63
+
+# Universe Settings
+universe:
+  # Universe type: "top_20" or "full_dag"
+  type: "top_20"
+  
+  # If using top_20, these stocks will be used
+  top_20:
+    - AAPL
+    - MSFT
+    - NVDA
+    - GOOGL
+    - META
+    - TSLA
+    - AMZN
+    - AMD
+    - AVGO
+    - ORCL
+    - NFLX
+    - CRM
+    - ADBE
+    - INTC
+    - CSCO
+    - QCOM
+    - TXN
+    - AMAT
+    - INTU
+    - MU
+
+# Strategy Configurations
+strategies:
+  # Strategy 1: Baseline 2-state HMM with technical indicators
+  - name: "2-State Technical"
+    enabled: true
+    n_components: 2
+    use_causal_features: false
+    optimize_n_components: false
+    n_components_range: [2, 4]
+    
+  # Strategy 2: 4-state HMM with technical indicators
+  - name: "4-State Technical"
+    enabled: false
+    n_components: 4
+    use_causal_features: false
+    optimize_n_components: false
+    n_components_range: [2, 4]
+    
+  # Strategy 3: Optimized HMM (2-4 states) with technical indicators
+  - name: "Optimized Technical (2-4 states)"
+    enabled: false
+    n_components: 3
+    use_causal_features: false
+    optimize_n_components: true
+    n_components_range: [2, 4]
+    
+  # Strategy 4: 4-state HMM with causal features
+  - name: "4-State Causal"
+    enabled: false
+    n_components: 4
+    use_causal_features: true
+    optimize_n_components: false
+    n_components_range: [2, 4]
+    
+  # Strategy 5: Full v2.0 - Causal features + confidence sizing + optimization
+  - name: "4-State Causal + Confidence"
+    enabled: true
+    n_components: 4
+    use_causal_features: true
+    optimize_n_components: false
+    n_components_range: [2, 4]
+
+# HMM Configuration (applies to all strategies)
+hmm:
+  model_order: 1
+  verbose: false
+  force_retrain: true
+  
+  # Confidence-based position sizing
+  min_confidence: 0.5           # Minimum confidence to take position (50%)
+  max_position: 1.0             # Maximum position size (100%)
+  allow_shorts: true            # Enable short positions
+  short_confidence_threshold: 0.7  # Confidence required for shorts (70%)
+  
+  # Signal filtering
+  min_position_size: 0.1        # Minimum position size to act (10%)
+
+# Causal DAG Settings
+causality:
+  dag_file: "large_network_graph_dag.pkl"  # File in data/causality_cache/
+  max_parents: 5                            # Max causal parents to use as features
+  min_pvalue: 0.01                          # P-value threshold for causality
+
+# Benchmark Settings
+benchmark:
+  ticker: "QQQ"    # Tech sector benchmark (alternatives: XLK, VGT)
+  enabled: true    # Compare against benchmark
+
+# Output Settings
+output:
+  save_results: true
+  results_dir: "data/backtest_results"
+  
+  # Save detailed trade log
+  save_trades: true
+  
+  # Generate plots
+  generate_plots: false
+  
+  # Verbosity level: "quiet", "normal", "verbose"
+  verbosity: "normal"
+
+# Performance Metrics
+metrics:
+  # Calculate these metrics
+  - total_return
+  - annual_return
+  - sharpe_ratio
+  - max_drawdown
+  - win_rate
+  - total_trades

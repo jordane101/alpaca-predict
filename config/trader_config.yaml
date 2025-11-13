@@ -1,0 +1,267 @@
+# Live Trading Bot Configuration
+# Configuration for scripts/trader.py - the production trading bot
+
+# Trading Schedule (cron-style)
+schedule:
+  # Run analysis at these times (Eastern Time)
+  hour: "8,11,16"      # 8 AM and 4 PM ET
+  minute: "45"      # At 45 minutes past the hour
+  timezone: "America/New_York"
+  
+  # Alternative examples:
+  # Every hour during market hours: hour: "9-16", minute: "30"
+  # Once per day: hour: "9", minute: "45"
+  # Multiple times: hour: "9,12,15", minute: "45"
+
+# Trading Agents Configuration
+# You can run multiple agents with different strategies simultaneously
+agents:
+  # Agent 1: HMM Strategy with Causal Features (Primary)
+  - name: "HMM_Causal_Agent"
+    enabled: true
+    asset_class: "stock"          # "stock" or "crypto"
+    
+    # Portfolio allocation
+    max_positions: 20             # Maximum number of positions to hold
+    total_allocation_pct: 0.80    # Use 80% of total account equity
+    
+    # Risk management
+    stop_loss_pct: 0.05           # 5% stop loss (fallback, HMM can override)
+    take_profit_pct: 0.10         # 10% take profit (2:1 risk/reward ratio)
+    
+    # Performance
+    max_analysis_workers: 4       # Parallel workers for stock analysis
+    
+    # Strategy configuration
+    strategy:
+      type: "HMM"
+      
+      # HMM Model Settings
+      n_components: 4                    # Number of hidden states (2-4)
+      model_order: 1                     # Markov model order
+      optimize_n_components: true        # Auto-select optimal 2-4 states
+      n_components_range: [2, 4]        # Range for optimization
+      
+      # Model Optimization
+      optimize_order: false              # Optimize model order per stock (slower)
+      max_order_to_test: 5              # Max order if optimizing
+      
+      # Causal Features (v2.0)
+      use_causal_features: true          # Use causal DAG features
+      causal_dag_file: null              # null = use default in causality_cache/
+      
+      # Confidence-Based Position Sizing (v2.0)
+      min_confidence: 0.6                # Minimum confidence to trade (60%)
+      max_position: 1.0                  # Maximum position size (100%)
+      allow_shorts: true                 # Enable short positions
+      short_confidence_threshold: 0.75   # Confidence required for shorts (75%)
+      
+      # Signal Ranking
+      ranking_metric: "sharpe"           # "sharpe" or "return"
+      
+      # Model Retraining
+      retrain_max_age_days: 1            # Retrain if model older than 1 day
+      walk_forward_window: 252           # Training window (1 year)
+      retrain_period: 63                 # Retrain frequency in backtests (quarterly)
+      
+      # Legacy causality filter (deprecated, use use_causal_features instead)
+      use_causality_filter: false
+      causality_significance: 0.05
+
+  # Agent 2: Conservative Technical Strategy (Secondary - DISABLED)
+  - name: "HMM_Technical_Agent"
+    enabled: false                       # Set to true to enable
+    asset_class: "stock"
+    
+    max_positions: 10
+    total_allocation_pct: 0.30          # Use 30% of equity
+    
+    stop_loss_pct: 0.03                 # Tighter stops (3%)
+    take_profit_pct: 0.09               # 3:1 risk/reward
+    
+    max_analysis_workers: 2
+    
+    strategy:
+      type: "HMM"
+      n_components: 2                    # Simple 2-state model
+      model_order: 1
+      optimize_n_components: false
+      
+      use_causal_features: false         # Technical indicators only
+      
+      min_confidence: 0.7                # Higher confidence threshold
+      allow_shorts: false                # Longs-only
+      
+      ranking_metric: "sharpe"
+      retrain_max_age_days: 0            # Retrain daily
+
+  # Agent 3: Crypto Trading (DISABLED by default)
+  - name: "HMM_Crypto_Agent"
+    enabled: false                       # Set to true to enable
+    asset_class: "crypto"                # Trade cryptocurrencies
+    
+    max_positions: 5
+    total_allocation_pct: 0.10          # Use 10% of equity
+    
+    stop_loss_pct: 0.10                 # Wider stops for crypto (10%)
+    take_profit_pct: 0.20               # Higher profit target (2:1)
+    
+    max_analysis_workers: 2
+    
+    strategy:
+      type: "HMM"
+      n_components: 3
+      model_order: 1
+      optimize_n_components: true
+      
+      use_causal_features: false        # Crypto may not be in DAG
+      
+      min_confidence: 0.65
+      allow_shorts: false
+      
+      ranking_metric: "return"
+      retrain_max_age_days: 0
+
+# Trading Universe
+# Define which assets each agent can trade
+universe:
+  # Stock universe (for stock agents)
+  stocks:
+    source: "dag"                       # "dag" or "list" or "sp500"
+    
+    # If source is "list", specify tickers here:
+    # tickers:
+    #   - AAPL
+    #   - MSFT
+    #   - GOOGL
+    
+    # If source is "dag", specify DAG file:
+    dag_file: "large_network_graph_dag.pkl"
+    
+    # Exclude certain tickers
+    exclude:
+      - SPY                             # Exclude broad market ETFs
+      - QQQ
+      - VOO
+      - VTI
+      - DIA
+      - IWM
+    
+    # Minimum requirements
+    min_market_cap: 1000000000          # $1B minimum market cap
+    min_avg_volume: 1000000             # 1M minimum average daily volume
+  
+  # Crypto universe (for crypto agents)
+  crypto:
+    tickers:
+      - BTC/USD
+      - ETH/USD
+      - AVAX/USD
+
+# Risk Management
+risk:
+  # Portfolio-level risk limits
+  max_total_allocation: 0.90            # Use max 90% of account
+  min_cash_reserve: 0.10                # Keep 10% in cash
+  
+  # Position sizing
+  max_position_size: 0.15               # No single position > 15% of portfolio
+  min_position_size: 0.01               # Minimum position size (1%)
+  
+  # Daily limits
+  max_trades_per_day: 50                # Maximum trades in a day
+  max_loss_per_day: 0.05                # Stop trading if down 5% in a day
+  
+  # Volatility-based sizing
+  use_volatility_sizing: false          # Scale positions by volatility
+  target_volatility: 0.15               # Target 15% annualized volatility
+
+# API Configuration
+api:
+  paper_trading: true                   # Use paper trading account
+  
+  # Rate limiting
+  max_requests_per_minute: 200
+  
+  # Data feed
+  data_feed: "IEX"                      # "IEX" or "SIP" (SIP requires subscription)
+  
+  # Order configuration
+  order_type: "market"                  # "market" or "limit"
+  limit_price_offset: 0.001             # For limit orders, offset from market (0.1%)
+  
+  # Timeouts
+  order_timeout_seconds: 60
+  websocket_reconnect_delay: 5
+
+# Monitoring & Alerts
+monitoring:
+  # Logging
+  log_level: "INFO"                     # "DEBUG", "INFO", "WARNING", "ERROR"
+  log_file: "data/logs/trader.log"
+  log_rotation: "daily"                 # "daily", "weekly", "size"
+  log_max_size_mb: 100                  # If rotation is "size"
+  
+  # Performance tracking
+  save_trades: true
+  trades_file: "data/logs/trades.csv"
+  
+  save_positions: true
+  positions_file: "position_ownership.json"
+  
+  # Alerts (requires configuration of notification service)
+  alerts:
+    enabled: false
+    
+    # Alert conditions
+    large_drawdown_pct: 0.10            # Alert if portfolio down 10%
+    position_stopped_out: true          # Alert on stop loss hits
+    daily_pnl_threshold: 1000           # Alert if daily P&L > $1000
+    
+    # Notification channels
+    email: "your-email@example.com"
+    slack_webhook: null                 # Slack webhook URL
+    discord_webhook: null               # Discord webhook URL
+
+# Backtesting (for strategy validation)
+backtest:
+  # Run backtest before live trading
+  validate_before_live: false
+  
+  # Backtest parameters
+  lookback_days: 365                    # Test on 1 year of data
+  min_sharpe_ratio: 1.0                 # Require Sharpe > 1.0
+  max_drawdown: 0.20                    # Require max DD < 20%
+
+# Advanced Settings
+advanced:
+  # Model caching
+  cache_models: true
+  cache_dir: "data/hmm_models"
+  max_cache_size_gb: 5
+  
+  # Feature engineering
+  use_technical_indicators: true
+  indicators:
+    - RSI
+    - MACD
+    - Bollinger_Bands
+    - SMA_50
+    - SMA_200
+  
+  # Correlation filtering
+  max_correlation: 0.70                 # Don't hold highly correlated positions
+  
+  # Sector limits
+  max_sector_allocation: 0.40           # Max 40% in any sector
+  
+  # Debug mode
+  debug: false                          # Enable verbose debug output
+  dry_run: false                        # Log trades without executing
+
+# Notes:
+# - Ensure agent allocations (total_allocation_pct) sum to ≤ 1.0
+# - Higher min_confidence = fewer but higher quality trades
+# - use_causal_features = true requires DAG to be built
+# - allow_shorts requires sufficient account permissions and equity
+# - max_analysis_workers should be ≤ CPU cores - 1
