@@ -24,6 +24,8 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from src.trading.trading_agent import TradingAgent
 from src.trading.strategies import HMMStrategy, DonchianBreakoutStrategy
 from src.trading.position import ManagedPosition, PositionState, CooldownReason
+from datetime import datetime
+import logging
 
 class Orchestrator:
     """
@@ -61,6 +63,11 @@ class Orchestrator:
         self.managed_positions = self._load_managed_positions()
         self.current_stock_subscriptions = set()
         self.current_crypto_subscriptions = set()
+        
+        # Initialize trade decision logger
+        self.trade_log_file = "data/logs/trade_decisions.log"
+        self._setup_trade_logger()
+        
         print(f"Initialized {len(self.agents)} agents: {[agent.name for agent in self.agents]}")
 
     def _get_agent_by_name(self, name: str) -> TradingAgent | None:
@@ -69,6 +76,43 @@ class Orchestrator:
             if agent.name == name:
                 return agent
         return None
+
+    def _setup_trade_logger(self):
+        """Sets up a dedicated logger for trade decisions."""
+        os.makedirs(os.path.dirname(self.trade_log_file), exist_ok=True)
+        
+        # Create a dedicated logger for trades
+        self.trade_logger = logging.getLogger('trade_decisions')
+        self.trade_logger.setLevel(logging.INFO)
+        
+        # Remove existing handlers to avoid duplicates
+        self.trade_logger.handlers.clear()
+        
+        # File handler for trade log
+        fh = logging.FileHandler(self.trade_log_file)
+        fh.setLevel(logging.INFO)
+        
+        # Format: timestamp | action | ticker | details
+        formatter = logging.Formatter('%(asctime)s | %(message)s', datefmt='%Y-%m-%d %H:%M:%S')
+        fh.setFormatter(formatter)
+        self.trade_logger.addHandler(fh)
+        
+        # Don't propagate to root logger
+        self.trade_logger.propagate = False
+
+    def _log_trade_decision(self, action: str, ticker: str, agent: str, details: dict):
+        """
+        Logs a trade decision to the dedicated trade log file.
+        
+        Args:
+            action: "OPEN_LONG", "OPEN_SHORT", "CLOSE", "HOLD", "REJECTED"
+            ticker: Stock symbol
+            agent: Agent name
+            details: Dictionary with additional info (price, notional, reason, etc.)
+        """
+        detail_str = " | ".join([f"{k}={v}" for k, v in details.items()])
+        log_msg = f"{action:12} | {ticker:6} | {agent:20} | {detail_str}"
+        self.trade_logger.info(log_msg)
 
     def _load_managed_positions(self):
         """Loads and reconstructs ManagedPosition objects from the ownership file."""
@@ -178,23 +222,47 @@ class Orchestrator:
                     agent = self.agents[0] if self.agents else None
 
                 if agent:
-
+                    qty = float(live_pos.qty)
+                    entry_price = float(live_pos.avg_entry_price)
+                    is_short = qty < 0
+                    
                     position = ManagedPosition(
                         symbol=ticker,
-                        entry_price=float(live_pos.avg_entry_price),
-                        quantity=float(live_pos.qty)
+                        entry_price=entry_price,
+                        quantity=qty
                     )
                     position.asset_class = agent.asset_class
                     position.agent_name = agent.name
                     position.state = PositionState.OPEN #New positions are open
 
-                    #Calculate SL/TP prices
-                    stop_loss_price, take_profit_price = self._calculate_price_targets(agent, ticker, float(live_pos.avg_entry_price))
-                    position.stop_loss_price = stop_loss_price
-                    position.take_profit_price = take_profit_price
+                    # Calculate SL/TP prices (simplified for sync - use static percentages)
+                    # For shorts: SL above entry, TP below entry
+                    # For longs: SL below entry, TP above entry
+                    if agent.stop_loss_pct:
+                        if is_short:
+                            position.stop_loss_price = entry_price * (1 + agent.stop_loss_pct)
+                        else:
+                            position.stop_loss_price = entry_price * (1 - agent.stop_loss_pct)
+                    
+                    if agent.take_profit_pct:
+                        if is_short:
+                            position.take_profit_price = entry_price * (1 - agent.take_profit_pct * 2)
+                        else:
+                            position.take_profit_price = entry_price * (1 + agent.take_profit_pct * 2)
 
                     self.managed_positions[ticker] = position
-                    print(f"  -> Position {ticker} added, owned by {agent.name}.")
+                    side = "SHORT" if is_short else "LONG"
+                    print(f"  -> {side} position {ticker} added, owned by {agent.name}. qty={qty:.4f}")
+                    
+                    # Log the position addition
+                    action = "SYNC_SHORT" if is_short else "SYNC_LONG"
+                    self._log_trade_decision(action, ticker, agent.name, {
+                        "entry_price": f"${entry_price:.2f}",
+                        "qty": f"{qty:.4f}",
+                        "stop_loss": f"${position.stop_loss_price:.2f}" if position.stop_loss_price else "None",
+                        "take_profit": f"${position.take_profit_price:.2f}" if position.take_profit_price else "None",
+                        "source": "account_sync"
+                    })
                 else:
                     print(f"  -> No agents available to claim new position {ticker}!")
 
@@ -398,7 +466,9 @@ class Orchestrator:
 
         if action == 'SELL' and position.state == PositionState.OPEN:
             position.transition_on_sell_submit(price)
-            await self._execute_sell(symbol)
+            # Determine reason for sell
+            reason = "stop_loss" if price <= position.stop_loss_price else "take_profit"
+            await self._execute_sell(symbol, reason=reason)
 
         elif action == 'REBUY' and position.state == PositionState.COOLING_DOWN:
             position.transition_on_rebuy_submit()
@@ -470,7 +540,7 @@ class Orchestrator:
                 # Use the current price for the transition reason, though it will be sold at market
                 latest_price = await self._get_latest_price(agent_for_sell, ticker_to_sell) or position.entry_price
                 position.transition_on_sell_submit(latest_price)
-                await self._execute_sell(ticker_to_sell)
+                await self._execute_sell(ticker_to_sell, reason="agent_signal")
             elif position: # It's managed, but not by this agent or not in an open state
                 print(f"Decision: {agent.name} to SELL {ticker_to_sell} -> DENIED (Not owned by agent).")
 
@@ -486,11 +556,18 @@ class Orchestrator:
             if ticker in self.managed_positions:
                 position = self.managed_positions[ticker]
                 print(f"Decision: {agent.name} to BUY {ticker} -> DENIED (Position already managed, state: {position.state.name}).")
+                self._log_trade_decision("REJECTED", ticker, agent.name, {
+                    "reason": "already_owned",
+                    "state": position.state.name
+                })
                 continue
 
             latest_price = await self._get_latest_price(agent, ticker)
             if not latest_price:
                 print(f"  -> Could not get latest price for {ticker}. Skipping buy.")
+                self._log_trade_decision("REJECTED", ticker, agent.name, {
+                    "reason": "no_price_data"
+                })
                 continue
 
             # Pass the agent's pick data to the target calculator
@@ -565,40 +642,86 @@ class Orchestrator:
         
         return stop_loss_price, take_profit_price
 
-    async def _execute_sell(self, ticker: str) -> bool:
+    async def _execute_sell(self, ticker: str, reason: str = "unknown") -> bool:
         """Executes a sell order for the given ticker."""
         print(f"  -> Submitting SELL order for {ticker}.")
+        
+        # Get position details before closing
+        position = self.managed_positions.get(ticker)
+        agent_name = position.agent_name if position else "unknown"
+        
         try:
             loop = asyncio.get_running_loop()
             # This closes the entire position.
             await loop.run_in_executor(None, self.trading_client.close_position, ticker)
             print(f"  -> Successfully submitted SELL order for {ticker}.")
+            
+            # Log the close
+            details = {"reason": reason}
+            if position:
+                details["entry_price"] = f"${position.entry_price:.2f}"
+                details["quantity"] = f"{position.quantity:.4f}"
+            self._log_trade_decision("CLOSE", ticker, agent_name, details)
+            
             return True
         except APIError as e:
             print(f"  -> Failed to close position for {ticker}. Reason: {e}")
+            self._log_trade_decision("REJECTED", ticker, agent_name, {
+                "reason": "close_failed",
+                "error": str(e)
+            })
             return False
 
     async def _execute_buy(self, agent: TradingAgent, ticker: str, notional_value: float, entry_price: float, stop_loss_price: float | None, take_profit_price: float | None) -> bool:
         """Executes a buy order for the given ticker and notional value."""
         if abs(notional_value) < 1:
             print(f"  -> Skipping BUY for {ticker}, notional value ${notional_value:.2f} is less than $1.")
+            self._log_trade_decision("REJECTED", ticker, agent.name, {
+                "reason": "notional_too_small",
+                "notional": f"${abs(notional_value):.2f}"
+            })
             return False
 
         # Determine if this is a long or short position
         is_short = notional_value < 0
         side = OrderSide.SELL if is_short else OrderSide.BUY
         abs_notional = abs(notional_value)
+        action = "OPEN_SHORT" if is_short else "OPEN_LONG"
         
-        print(f"  -> Submitting {'SHORT' if is_short else 'BUY'} order for {ticker} (Notional: ${abs_notional:.2f}).")
+        # For shorts, use qty (whole shares) instead of notional (Alpaca doesn't support fractional shorts)
+        if is_short:
+            qty = int(abs_notional / entry_price)  # Calculate whole shares
+            if qty < 1:
+                print(f"  -> Skipping SHORT for {ticker}, notional ${abs_notional:.2f} equals {qty} shares (min 1).")
+                self._log_trade_decision("REJECTED", ticker, agent.name, {
+                    "reason": "insufficient_notional_for_short",
+                    "notional": f"${abs_notional:.2f}",
+                    "shares": str(qty)
+                })
+                return False
+            print(f"  -> Submitting SHORT order for {ticker} ({qty} shares @ ${entry_price:.2f}).")
+        else:
+            print(f"  -> Submitting BUY order for {ticker} (Notional: ${abs_notional:.2f}).")
+        
         try:
             # Crypto orders must use GTC (Good 'Til Canceled) time in force.
             tif = TimeInForce.GTC if agent.asset_class == 'crypto' else TimeInForce.DAY
-            market_order_data = MarketOrderRequest(
-                symbol=ticker,
-                notional=abs_notional,
-                side=side,
-                time_in_force=tif
-            )
+            
+            # For shorts, use qty; for longs, use notional
+            if is_short:
+                market_order_data = MarketOrderRequest(
+                    symbol=ticker,
+                    qty=qty,
+                    side=side,
+                    time_in_force=tif
+                )
+            else:
+                market_order_data = MarketOrderRequest(
+                    symbol=ticker,
+                    notional=abs_notional,
+                    side=side,
+                    time_in_force=tif
+                )
             loop = asyncio.get_running_loop()
             # Pass market_order_data as a positional argument, as run_in_executor
             # does not accept keyword arguments for the target function.
@@ -618,9 +741,28 @@ class Orchestrator:
             self.managed_positions[ticker] = position
 
             print(f"  -> Successfully submitted {'SHORT' if is_short else 'BUY'} order for {ticker}.")
+            
+            # Log successful trade
+            log_details = {
+                "price": f"${entry_price:.2f}",
+                "stop_loss": f"${stop_loss_price:.2f}" if stop_loss_price else "None",
+                "take_profit": f"${take_profit_price:.2f}" if take_profit_price else "None"
+            }
+            if is_short:
+                log_details["qty"] = str(qty)
+                log_details["notional"] = f"${qty * entry_price:.2f}"
+            else:
+                log_details["notional"] = f"${abs_notional:.2f}"
+            
+            self._log_trade_decision(action, ticker, agent.name, log_details)
             return True
         except APIError as e:
             print(f"  -> Failed to submit order for {ticker}. Reason: {e}")
+            self._log_trade_decision("REJECTED", ticker, agent.name, {
+                "reason": "api_error",
+                "error": str(e),
+                "attempted_action": action
+            })
             return False
 
     async def _execute_rebuy(self, position: ManagedPosition) -> bool:
