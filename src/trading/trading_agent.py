@@ -85,7 +85,7 @@ class TradingAgent:
     defined capital allocation.
     """
 
-    def __init__(self, name: str, strategy: BaseStrategy, trading_client: TradingClient, data_client: StockHistoricalDataClient, max_positions: int = 10, total_allocation_pct: float = 0.5, waterfall_allocation_pcts: list = None, stop_loss_pct: float = None, take_profit_pct: float = None, max_analysis_workers: int = 8, asset_class: str = 'us_equity'):
+    def __init__(self, name: str, strategy: BaseStrategy, trading_client: TradingClient, data_client: StockHistoricalDataClient, max_positions: int = 10, total_allocation_pct: float = 0.5, waterfall_allocation_pcts: list = None, stop_loss_pct: float = None, take_profit_pct: float = None, max_analysis_workers: int = 8, asset_class: str = 'us_equity', stop_loss_sd_multiplier: float = 1.0, take_profit_sd_multiplier: float = 2.0):
         """
         Initializes the agent and the Alpaca trading client.
 
@@ -112,6 +112,8 @@ class TradingAgent:
         self.total_allocation_pct = total_allocation_pct
         self.stop_loss_pct = stop_loss_pct
         self.take_profit_pct = take_profit_pct
+        self.stop_loss_sd_multiplier = stop_loss_sd_multiplier
+        self.take_profit_sd_multiplier = take_profit_sd_multiplier
         self.waterfall_allocation_pcts = waterfall_allocation_pcts
         self.max_analysis_workers = max_analysis_workers
         self.asset_class = asset_class

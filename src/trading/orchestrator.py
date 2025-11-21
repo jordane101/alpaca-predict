@@ -586,25 +586,29 @@ class Orchestrator:
 
         # Dynamic Target Logic for HMM Strategy
         if isinstance(agent.strategy, HMMStrategy) and pick_data and pick_data.get('predicted_state_mean_return', 0) > 0:
-            # DYNAMIC STOP-LOSS: Based on 1x the state's std dev (expected volatility/risk)
+            # Get SD multipliers from agent config (default to 1.0 and 2.0 if not set)
+            sl_multiplier = getattr(agent, 'stop_loss_sd_multiplier', 1.0)
+            tp_multiplier = getattr(agent, 'take_profit_sd_multiplier', 2.0)
+            
+            # DYNAMIC STOP-LOSS: Based on N x the state's std dev (expected volatility/risk)
             sl_pct = pick_data.get('predicted_state_std_return', 0) # Default to 0 if not present
             
             if sl_pct > 0:
                 if is_short:
                     # For shorts: stop-loss is ABOVE entry (price goes up = loss)
                     # take-profit is BELOW entry (price goes down = profit)
-                    stop_loss_price = price * (1 + sl_pct)  # +1 std dev
-                    tp_pct = sl_pct * 2
-                    take_profit_price = price * (1 - tp_pct)  # -2 std dev
-                    print(f"  -> Using DYNAMIC stop-loss for SHORT {ticker} (1x StDev). Target: ${stop_loss_price:.2f} (+{sl_pct:.2%})")
-                    print(f"  -> Using DYNAMIC take-profit for SHORT {ticker} (2x StDev). Target: ${take_profit_price:.2f} (-{tp_pct:.2%})")
+                    stop_loss_price = price * (1 + sl_pct * sl_multiplier)
+                    tp_pct = sl_pct * tp_multiplier
+                    take_profit_price = price * (1 - tp_pct)
+                    print(f"  -> Using DYNAMIC stop-loss for SHORT {ticker} ({sl_multiplier}x StDev). Target: ${stop_loss_price:.2f} (+{sl_pct * sl_multiplier:.2%})")
+                    print(f"  -> Using DYNAMIC take-profit for SHORT {ticker} ({tp_multiplier}x StDev). Target: ${take_profit_price:.2f} (-{tp_pct:.2%})")
                 else:
                     # For longs: stop-loss is BELOW entry, take-profit is ABOVE entry
-                    stop_loss_price = price * (1 - sl_pct)  # -1 std dev
-                    tp_pct = sl_pct * 2
-                    take_profit_price = price * (1 + tp_pct)  # +2 std dev
-                    print(f"  -> Using DYNAMIC stop-loss for {ticker} (1x StDev). Target: ${stop_loss_price:.2f} (-{sl_pct:.2%})")
-                    print(f"  -> Using DYNAMIC take-profit for {ticker} (2x StDev). Target: ${take_profit_price:.2f} (+{tp_pct:.2%})")
+                    stop_loss_price = price * (1 - sl_pct * sl_multiplier)
+                    tp_pct = sl_pct * tp_multiplier
+                    take_profit_price = price * (1 + tp_pct)
+                    print(f"  -> Using DYNAMIC stop-loss for {ticker} ({sl_multiplier}x StDev). Target: ${stop_loss_price:.2f} (-{sl_pct * sl_multiplier:.2%})")
+                    print(f"  -> Using DYNAMIC take-profit for {ticker} ({tp_multiplier}x StDev). Target: ${take_profit_price:.2f} (+{tp_pct:.2%})")
             else:
                 # Fallback to static percentages if dynamic std dev is not available
                 print("  -> HMM state std dev not available. Falling back to static SL/TP.")

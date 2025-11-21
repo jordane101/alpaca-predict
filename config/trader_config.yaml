@@ -26,7 +26,7 @@ agents:
     total_allocation_pct: 0.80    # Use 80% of total account equity
     
     # Risk management
-    stop_loss_pct: 0.05           # 5% stop loss (fallback, HMM can override)
+    stop_loss_pct: 0.02           # 2% stop loss (fallback, HMM can override)
     take_profit_pct: 0.10         # 10% take profit (2:1 risk/reward ratio)
     
     # Performance
@@ -55,6 +55,10 @@ agents:
       max_position: 1.0                  # Maximum position size (100%)
       allow_shorts: true                 # Enable short positions
       short_confidence_threshold: 0.75   # Confidence required for shorts (75%)
+      
+      # Dynamic Stop-Loss and Take-Profit (based on HMM state volatility)
+      stop_loss_sd_multiplier: 0.5       # Stop-loss at +/- N std deviations
+      take_profit_sd_multiplier: 1.5     # Take-profit at +/- N std deviations (N:1 risk/reward)
       
       # Signal Ranking
       ranking_metric: "sharpe"           # "sharpe" or "return"
@@ -92,6 +96,9 @@ agents:
       min_confidence: 0.7                # Higher confidence threshold
       allow_shorts: false                # Longs-only
       
+      stop_loss_sd_multiplier: 1.5       # More conservative stop-loss
+      take_profit_sd_multiplier: 3.0     # Larger profit target
+      
       ranking_metric: "sharpe"
       retrain_max_age_days: 0            # Retrain daily
 
@@ -118,6 +125,9 @@ agents:
       
       min_confidence: 0.65
       allow_shorts: false
+      
+      stop_loss_sd_multiplier: 2.0       # Wider stops for crypto volatility
+      take_profit_sd_multiplier: 3.0     # Larger profit targets
       
       ranking_metric: "return"
       retrain_max_age_days: 0

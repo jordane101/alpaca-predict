@@ -94,6 +94,11 @@ def build_agent_configs(config):
             'max_analysis_workers': agent_cfg.get('max_analysis_workers', 4)
         }
         
+        # Add stop-loss and take-profit SD multipliers from strategy config
+        strategy_cfg = agent_cfg.get('strategy', {})
+        agent_config['stop_loss_sd_multiplier'] = strategy_cfg.get('stop_loss_sd_multiplier', 1.0)
+        agent_config['take_profit_sd_multiplier'] = strategy_cfg.get('take_profit_sd_multiplier', 2.0)
+        
         # Add asset_class if specified (for crypto agents)
         if 'asset_class' in agent_cfg:
             agent_config['asset_class'] = agent_cfg['asset_class']
