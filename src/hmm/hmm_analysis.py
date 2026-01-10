@@ -136,17 +136,19 @@ class AnalyzeHMM:
         self.base_features = []
         if self.use_causal_features and self.causal_engine:
             # Use causal parents from DAG + minimal technical indicators
+            # Include Vol_Adjusted_Return for better state detection across volatility regimes
             if type(timeframe) == type(TimeFrame.Day):
-                self.base_features = ["Return", "Volatility"]  # Start with core features
+                self.base_features = ["Return", "Volatility", "Vol_Adjusted_Return"]  # Start with core features
             elif type(timeframe) == type(TimeFrame.Week):
-                self.base_features = ["Return", "Volatility"]
+                self.base_features = ["Return", "Volatility", "Vol_Adjusted_Return"]
             # Causal features will be added in createFeatures()
         else:
             # Traditional technical indicators
+            # Include Vol_Adjusted_Return for better state detection across volatility regimes
             if type(timeframe) == type(TimeFrame.Day):
-                self.base_features = ["Return", "Volatility", "SMA_50", "SP500_Return"]
+                self.base_features = ["Return", "Volatility", "Vol_Adjusted_Return", "SMA_50", "SP500_Return"]
             elif type(timeframe) == type(TimeFrame.Week):
-                self.base_features = ["Return", "Volatility", "SMA_10", "SP500_Return"]
+                self.base_features = ["Return", "Volatility", "Vol_Adjusted_Return", "SMA_10", "SP500_Return"]
 
         self.features = [] # Will be populated by createFeatures()
         self.data = self.createFeatures()
@@ -236,6 +238,11 @@ class AnalyzeHMM:
 
         # Calculate volatility (30-day rolling standard deviation of returns)
         data['Volatility'] = data['Return'].rolling(window=30).std()
+        
+        # Calculate volatility-adjusted return (return normalized by rolling volatility)
+        # This helps HMM identify states more consistently across different volatility regimes
+        # Add small epsilon to avoid division by zero
+        data['Vol_Adjusted_Return'] = data['Return'] / (data['Volatility'] + 1e-8)
 
         # Simple Moving Average
         if 'SMA_50' in self.base_features:
